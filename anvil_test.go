@@ -381,7 +381,7 @@ func TestAnvil(t *testing.T) {
 		// Check metrics
 		metrics := anvil.Metrics()
 		assert.Greater(t, metrics.RPCCalls, int64(0))
-		assert.Greater(t, metrics.BlocksMined, int64(0))
+		assert.Greater(t, metrics.BlocksMined, uint64(0))
 		assert.Greater(t, metrics.StartupTime, time.Duration(0))
 	})
 
