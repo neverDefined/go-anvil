@@ -19,11 +19,11 @@ jobs:
       - name: Install Foundry
         run: |
           curl -L https://foundry.paradigm.xyz | bash
-          export PATH="$HOME/.foundry/bin:$PATH"
+          source $HOME/.bashrc
           foundryup
 
       - name: Test
         run: |
-          export PATH="$HOME/.foundry/bin:$PATH"
+          source $HOME/.bashrc
           go test -v ./...
 
