@@ -1,0 +1,159 @@
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    # Default linters
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    
+    # Additional recommended linters
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - gosec
+    - bodyclose
+    - noctx
+    - exportloopref
+    - gocritic
+    - gocyclo
+    - dupl
+    - prealloc
+    - whitespace
+    - dogsled
+    - errorlint
+    - nestif
+    - nilerr
+    
+  disable:
+    - exhaustive
+    - exhaustruct
+    - gochecknoglobals
+    - gochecknoinits
+    - godox
+    - wrapcheck
+    - paralleltest
+    - varnamelen
+    - testpackage
+    - nlreturn
+    - wsl
+    - lll
+    - funlen
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+    
+  govet:
+    check-shadowing: true
+    enable-all: true
+    
+  gofmt:
+    simplify: true
+    
+  goimports:
+    local-prefixes: github.com/neverDefined/go-anvil
+    
+  misspell:
+    locale: US
+    
+  revive:
+    confidence: 0.8
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+      
+  gocyclo:
+    min-complexity: 15
+    
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport
+      - ifElseChain
+      - octalLiteral
+      - whyNoLint
+      - wrapperFunc
+      
+  dupl:
+    threshold: 100
+    
+  gosec:
+    excludes:
+      - G104 # Audit errors not checked - we handle this with errcheck
+    confidence: medium
+    
+  nestif:
+    min-complexity: 5
+    
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: true
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - gocritic
+        
+    # Exclude known issues with large switch statements
+    - linters:
+        - gocyclo
+      text: "cyclomatic complexity"
+      
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  
+  # Show only new issues
+  new: false
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+

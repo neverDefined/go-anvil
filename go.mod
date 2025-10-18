@@ -1,4 +1,4 @@
-module neverDefined/go-anvil
+module github.com/neverDefined/go-anvil
 
 go 1.23.4
 
