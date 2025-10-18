@@ -26,7 +26,7 @@ foundryup
 
 2. Import the package:
 ```go
-import "your-project/backend/test/client"
+import "github.com/neverDefined/go-anvil/anvil"
 ```
 
 ## Core Features
@@ -34,11 +34,11 @@ import "your-project/backend/test/client"
 ### 1. Basic Node Management
 ```go
 // Create and start a node with default configuration
-anvil, err := client.NewAnvil()
+anvil, err := anvil.NewAnvil()
 if err != nil {
     log.Fatal(err)
 }
-err = anvil.Start(10 * time.Second)
+err = anvil.Start()
 defer anvil.Close()
 
 // Access clients
@@ -48,7 +48,7 @@ rpcClient := anvil.RPCClient()
 
 ### 2. Builder Pattern Configuration
 ```go
-anvil, err := client.NewAnvilBuilder().
+anvil, err := anvil.NewAnvilBuilder().
     WithBlockTime("1").
     WithChainId("1337").
     WithGasLimit("12000000").
@@ -113,7 +113,7 @@ err = anvil.WaitForBlock(targetBlock, 30*time.Second)
 ### Configuration Management
 ```go
 // Custom configuration
-config := client.AnvilConfig{
+config := anvil.AnvilConfig{
     DefaultTimeout: 15 * time.Second,
     MaxRetries:     10,
     RetryInterval:  200 * time.Millisecond,
@@ -125,8 +125,8 @@ config := client.AnvilConfig{
 
 1. Use defer for cleanup:
 ```go
-anvil, _ := client.NewAnvil()
-err := anvil.Start(10 * time.Second)
+anvil, _ := anvil.NewAnvil()
+err := anvil.Start()
 defer anvil.Close()
 ```
 
@@ -139,7 +139,7 @@ err := retry(5, time.Second, func() error {
 
 3. Configure logging appropriately:
 ```go
-anvil, _ := client.NewAnvilBuilder().
+anvil, _ := anvil.NewAnvilBuilder().
     WithLogLevel(zerolog.DebugLevel).
     Build()
 ```
