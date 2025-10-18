@@ -17,12 +17,13 @@ jobs:
           go-version: '1.23'
 
       - name: Install Foundry
-        run: |
-          curl -L https://foundry.paradigm.xyz | bash
-          ~/.foundry/bin/foundryup
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
 
-      - name: Test
-        run: |
-          export PATH="$HOME/.foundry/bin:$PATH"
-          go test -v ./...
+      - name: Verify Anvil
+        run: anvil --version
+
+      - name: Run tests
+        run: go test -v ./...
 
