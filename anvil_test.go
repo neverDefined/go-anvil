@@ -36,7 +36,7 @@ func setupTestAnvil(t *testing.T, opts ...func(*AnvilBuilder)) *Anvil {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		anvil.Close()
+		_ = anvil.Close()
 		time.Sleep(time.Second)
 	})
 
@@ -74,7 +74,7 @@ func TestAnvil(t *testing.T) {
 		require.NoError(t, err)
 
 		metrics := anvil.Metrics()
-		assert.Equal(t, int64(1), metrics.BlocksMined)
+		assert.Equal(t, uint64(1), metrics.BlocksMined)
 	})
 
 	t.Run("Test Account Management", func(t *testing.T) {
@@ -114,7 +114,7 @@ func TestAnvil(t *testing.T) {
 		require.NoError(t, err)
 		newTime := newBlock.Time()
 
-		assert.Greater(t, uint64(newTime), uint64(initialTime))
+		assert.Greater(t, newTime, initialTime)
 
 		metrics := anvil.Metrics()
 		assert.GreaterOrEqual(t, metrics.RPCCalls, int64(2))
@@ -162,7 +162,7 @@ func TestAnvil(t *testing.T) {
 	t.Run("Test Builder Options", func(t *testing.T) {
 		anvil := setupTestAnvil(t, func(b *AnvilBuilder) {
 			b.WithBlockTime("2").
-				WithChainId("1337").
+				WithChainID("1337").
 				WithGasLimit("12000000").
 				WithGasPrice("20000000000")
 		})
@@ -197,7 +197,7 @@ func TestAnvil(t *testing.T) {
 
 		err = newAnvil.Start()
 		require.NoError(t, err)
-		defer newAnvil.Close()
+		defer func() { _ = newAnvil.Close() }()
 
 		time.Sleep(time.Second * 2)
 
@@ -278,13 +278,13 @@ func TestAnvil(t *testing.T) {
 		assert.Equal(t, initialBlock+5, newBlock)
 
 		metrics := anvil.Metrics()
-		assert.GreaterOrEqual(t, metrics.BlocksMined, int64(5))
+		assert.GreaterOrEqual(t, metrics.BlocksMined, uint64(5))
 	})
 
 	t.Run("Test Mine With Timestamp", func(t *testing.T) {
 		anvil := setupTestAnvil(t)
 
-		futureTimestamp := uint64(time.Now().Unix() + 3600)
+		futureTimestamp := uint64(time.Now().Unix() + 3600) //nolint:gosec // Unix timestamp is always positive
 		err := anvil.Mine(1, &futureTimestamp)
 		require.NoError(t, err)
 
@@ -381,7 +381,7 @@ func TestAnvil(t *testing.T) {
 		// Check metrics
 		metrics := anvil.Metrics()
 		assert.Greater(t, metrics.RPCCalls, int64(0))
-		assert.Greater(t, metrics.BlocksMined, int64(0))
+		assert.Greater(t, metrics.BlocksMined, uint64(0))
 		assert.Greater(t, metrics.StartupTime, time.Duration(0))
 	})
 

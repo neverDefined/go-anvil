@@ -50,7 +50,7 @@ rpcClient := anvil.RPCClient()
 ```go
 anvil, err := anvil.NewAnvilBuilder().
     WithBlockTime("1").
-    WithChainId("1337").
+    WithChainID("1337").
     WithGasLimit("12000000").
     WithPort("8545").
     WithLogLevel(zerolog.InfoLevel).
