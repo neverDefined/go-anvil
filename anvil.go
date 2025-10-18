@@ -1,3 +1,6 @@
+// Package anvil provides a Go interface for programmatic control of Anvil,
+// Foundry's local Ethereum test node. It enables management of test environments,
+// blockchain state manipulation, and control over time and accounts during development.
 package anvil
 
 import (
@@ -42,6 +45,8 @@ var (
 )
 
 // AnvilConfig holds the configuration for Anvil client
+//
+//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilConfig struct {
 	DefaultTimeout time.Duration
 	StartupSleep   time.Duration
@@ -64,18 +69,22 @@ var DefaultConfig = AnvilConfig{
 }
 
 // AnvilMetrics contains runtime metrics for the Anvil instance
+//
+//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilMetrics struct {
 	StartupTime   time.Duration
-	BlocksMined   int64
+	BlocksMined   uint64
 	RPCCalls      int64
 	LastError     error
 	LastErrorTime time.Time
 }
 
 // AnvilPrivateKey represents the default test account private keys
+//
+//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilPrivateKey string
 
-// Default Anvil private keys for testing
+// AnvilPrivateKeys are the default Anvil private keys for testing.
 var AnvilPrivateKeys = [...]AnvilPrivateKey{
 	"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
 	"59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
@@ -107,7 +116,7 @@ type Anvil struct {
 	rpcURL      string
 	logger      zerolog.Logger
 	metrics     AnvilMetrics
-	blocksMined atomic.Int64
+	blocksMined atomic.Uint64
 	rpcCalls    atomic.Int64
 	closeOnce   sync.Once
 	stopOnce    sync.Once
@@ -143,7 +152,7 @@ func (a *Anvil) Start() error {
 		anvilPath = filepath.Join(homeDir, ".foundry", "bin", "anvil")
 	}
 
-	a.cmd = exec.CommandContext(a.context, anvilPath, a.args...)
+	a.cmd = exec.CommandContext(a.context, anvilPath, a.args...) //nolint:gosec // anvilPath is validated
 
 	// Capture stdout and stderr
 	a.cmd.Stdout = os.Stdout
@@ -400,7 +409,7 @@ func (a *Anvil) SetNonce(address common.Address, nonce uint64) error {
 // Returns an error if the RPC call fails.
 func (a *Anvil) Mine(numBlocks uint64, timestamp *uint64) error {
 	a.rpcCalls.Add(1)
-	a.blocksMined.Add(int64(numBlocks))
+	a.blocksMined.Add(numBlocks)
 
 	var err error
 	if timestamp != nil {
@@ -609,6 +618,8 @@ func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
 
 // AnvilBuilder helps construct Anvil instances using the builder pattern.
 // It allows for flexible configuration of Anvil options before creating the instance.
+//
+//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilBuilder struct {
 	args     []string
 	rpcURL   string
@@ -655,10 +666,10 @@ func (b *AnvilBuilder) WithPort(port string) *AnvilBuilder {
 	return b
 }
 
-// WithChainId sets the chain ID for the Anvil instance.
+// WithChainID sets the chain ID for the Anvil instance.
 // Default is 31337. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithChainId(chainId string) *AnvilBuilder {
-	b.args = append(b.args, "--chain-id", chainId)
+func (b *AnvilBuilder) WithChainID(chainID string) *AnvilBuilder {
+	b.args = append(b.args, "--chain-id", chainID)
 	return b
 }
 
