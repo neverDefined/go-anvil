@@ -24,19 +24,19 @@ import (
 var (
 	// ErrNotStarted indicates the Anvil instance has not been started yet
 	ErrNotStarted = fmt.Errorf("anvil: instance not started")
-	
+
 	// ErrAlreadyStarted indicates the Anvil instance is already running
 	ErrAlreadyStarted = fmt.Errorf("anvil: instance already started")
-	
+
 	// ErrConnectionFailed indicates the connection to Anvil failed
 	ErrConnectionFailed = fmt.Errorf("anvil: connection failed")
-	
+
 	// ErrProcessNotFound indicates the Anvil process could not be found
 	ErrProcessNotFound = fmt.Errorf("anvil: process not found")
-	
+
 	// ErrInvalidConfig indicates the configuration is invalid
 	ErrInvalidConfig = fmt.Errorf("anvil: invalid configuration")
-	
+
 	// ErrRPCCallFailed indicates an RPC call to Anvil failed
 	ErrRPCCallFailed = fmt.Errorf("anvil: RPC call failed")
 )
@@ -129,17 +129,20 @@ func NewAnvil() (*Anvil, error) {
 func (a *Anvil) Start() error {
 	startTime := time.Now()
 
-	// the foundry use the `XDG_CONFIG_HOME` as base dir if it's set, or user's home
-	homeDir := os.Getenv("XDG_CONFIG_HOME")
-	if homeDir == "" {
-		var err error
-		homeDir, err = os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home directory: %w", err)
+	// Look for anvil in PATH first, then fall back to standard Foundry location
+	anvilPath, err := exec.LookPath("anvil")
+	if err != nil {
+		// Fallback: try the standard Foundry location
+		homeDir := os.Getenv("XDG_CONFIG_HOME")
+		if homeDir == "" {
+			homeDir, err = os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
 		}
+		anvilPath = filepath.Join(homeDir, ".foundry", "bin", "anvil")
 	}
 
-	anvilPath := filepath.Join(homeDir, ".foundry", "bin", "anvil")
 	a.cmd = exec.CommandContext(a.context, anvilPath, a.args...)
 
 	// Capture stdout and stderr
@@ -154,7 +157,7 @@ func (a *Anvil) Start() error {
 	time.Sleep(2 * time.Second)
 
 	// Try to establish connection with retries
-	err := retry(5, time.Second, func() error {
+	err = retry(5, time.Second, func() error {
 		if err := a.connect(); err != nil {
 			a.logger.Debug().Err(err).Msg("Failed to connect, retrying...")
 			return err
@@ -398,14 +401,14 @@ func (a *Anvil) SetNonce(address common.Address, nonce uint64) error {
 func (a *Anvil) Mine(numBlocks uint64, timestamp *uint64) error {
 	a.rpcCalls.Add(1)
 	a.blocksMined.Add(int64(numBlocks))
-	
+
 	var err error
 	if timestamp != nil {
 		err = a.rpcClient.Call(nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", *timestamp))
 	} else {
 		err = a.rpcClient.Call(nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks))
 	}
-	
+
 	if err != nil {
 		a.logger.Error().Err(err).Uint64("numBlocks", numBlocks).Msg("Failed to mine blocks")
 	}
@@ -465,12 +468,12 @@ func (a *Anvil) AutoImpersonate(enabled bool) error {
 // Returns an error if the RPC call fails or if not in forked mode.
 func (a *Anvil) ResetFork(forkURL string, blockNumber *uint64) error {
 	a.rpcCalls.Add(1)
-	
+
 	var err error
 	if blockNumber != nil {
 		err = a.rpcClient.Call(nil, "anvil_reset", map[string]interface{}{
 			"forking": map[string]interface{}{
-				"jsonRpcUrl": forkURL,
+				"jsonRpcUrl":  forkURL,
 				"blockNumber": fmt.Sprintf("0x%x", *blockNumber),
 			},
 		})
@@ -481,7 +484,7 @@ func (a *Anvil) ResetFork(forkURL string, blockNumber *uint64) error {
 			},
 		})
 	}
-	
+
 	if err != nil {
 		a.logger.Error().Err(err).Str("forkURL", forkURL).Msg("Failed to reset fork")
 	}
