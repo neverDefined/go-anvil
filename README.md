@@ -103,11 +103,15 @@ keys, addresses, err := anvil.Accounts()
 
 ### State Management
 ```go
-// Reset chain state
-err := anvil.Reset()
+// Reset chain state (fast - uses RPC call, doesn't restart process)
+err := anvil.ResetState()
 
 // Wait for specific block
 err = anvil.WaitForBlock(targetBlock, 30*time.Second)
+
+// Snapshot and revert state
+snapshotID, err := anvil.Snapshot()
+success, err := anvil.Revert(snapshotID)
 ```
 
 ### Configuration Management
@@ -162,6 +166,9 @@ The package includes comprehensive tests covering:
 - Account impersonation
 - Metrics collection
 - Error handling
-- Reset functionality
+- State reset functionality
+- Snapshot and revert operations
+
+The test suite uses a shared Anvil instance with `ResetState()` between tests for faster execution.
 
 See `anvil_test.go` for detailed testing examples.
