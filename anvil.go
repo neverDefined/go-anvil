@@ -404,16 +404,16 @@ func (a *Anvil) SetNonce(address common.Address, nonce uint64) error {
 
 // Mine mines multiple blocks at once.
 // The numBlocks parameter specifies how many blocks to mine.
-// If timestamp is nil, blocks will use incremental timestamps. Otherwise, the first block
+// If timestamp is 0, blocks will use incremental timestamps. Otherwise, the first block
 // will use the specified timestamp and subsequent blocks will increment from there.
 // Returns an error if the RPC call fails.
-func (a *Anvil) Mine(numBlocks uint64, timestamp *uint64) error {
+func (a *Anvil) Mine(numBlocks uint64, timestamp uint64) error {
 	a.rpcCalls.Add(1)
 	a.blocksMined.Add(numBlocks)
 
 	var err error
-	if timestamp != nil {
-		err = a.rpcClient.Call(nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", *timestamp))
+	if timestamp != 0 {
+		err = a.rpcClient.Call(nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", timestamp))
 	} else {
 		err = a.rpcClient.Call(nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks))
 	}
@@ -473,22 +473,22 @@ func (a *Anvil) AutoImpersonate(enabled bool) error {
 }
 
 // ResetFork resets the fork to a fresh state, optionally at a new block number.
-// If blockNumber is nil, resets to the original fork block or latest block.
+// If blockNumber is 0, resets to the original fork block or latest block.
 // Returns an error if the RPC call fails or if not in forked mode.
-func (a *Anvil) ResetFork(forkURL string, blockNumber *uint64) error {
+func (a *Anvil) ResetFork(forkURL string, blockNumber uint64) error {
 	a.rpcCalls.Add(1)
 
 	var err error
-	if blockNumber != nil {
-		err = a.rpcClient.Call(nil, "anvil_reset", map[string]interface{}{
-			"forking": map[string]interface{}{
+	if blockNumber != 0 {
+		err = a.rpcClient.Call(nil, "anvil_reset", map[string]any{
+			"forking": map[string]any{
 				"jsonRpcUrl":  forkURL,
-				"blockNumber": fmt.Sprintf("0x%x", *blockNumber),
+				"blockNumber": fmt.Sprintf("0x%x", blockNumber),
 			},
 		})
 	} else {
-		err = a.rpcClient.Call(nil, "anvil_reset", map[string]interface{}{
-			"forking": map[string]interface{}{
+		err = a.rpcClient.Call(nil, "anvil_reset", map[string]any{
+			"forking": map[string]any{
 				"jsonRpcUrl": forkURL,
 			},
 		})
@@ -568,21 +568,17 @@ func (a *Anvil) Metrics() AnvilMetrics {
 	}
 }
 
-// Reset restarts the Anvil instance, clearing all blockchain state.
-// This is equivalent to stopping and starting a fresh instance. All balances,
-// contracts, and state will be reset to initial values. Returns an error if
-// the restart fails.
-func (a *Anvil) Reset() error {
-	// Stop the current instance
-	if err := a.Stop(); err != nil {
-		return fmt.Errorf("failed to stop anvil: %w", err)
+// ResetState resets the Anvil blockchain state to its initial values without restarting the process.
+// This is much faster than stopping and starting the instance. All balances, contracts,
+// and state will be reset to initial values, but the Anvil process continues running.
+// Returns an error if the RPC call fails.
+func (a *Anvil) ResetState() error {
+	a.rpcCalls.Add(1)
+	err := a.rpcClient.Call(nil, "anvil_reset")
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to reset state")
 	}
-
-	// Wait for cleanup
-	time.Sleep(time.Second * 2)
-
-	// Start a new instance
-	return a.Start()
+	return err
 }
 
 // WaitForBlock waits for the blockchain to reach a specific block number.

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom error types for better error handling (`ErrNotStarted`, `ErrConnectionFailed`, etc.)
 - Thread-safe resource cleanup using `sync.Once` pattern
 - Snapshot and Revert RPC methods for state management
+- `ResetState()` method for fast state reset using RPC (replaces `Reset()`)
 - Additional Anvil RPC methods:
   - `SetCode()` - Set bytecode at an address
   - `SetStorageAt()` - Set storage slot values
@@ -27,12 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - GitHub Actions CI/CD pipeline
   - Comprehensive Makefile with common commands
 - Documentation improvements in README.md
+- Shared Anvil instance pattern in tests for significantly faster test execution
 
 ### Changed
 - Package name from `main` to `anvil` (proper library package)
 - Module path to `github.com/neverDefined/go-anvil`
 - README.md import paths and API examples to match actual implementation
 - `Start()` method no longer takes timeout parameter (uses internal retry logic)
+- **BREAKING**: `Reset()` method replaced with `ResetState()` that uses RPC instead of process restart
+- Test suite now uses shared Anvil instance with `ResetState()` between tests (much faster)
 
 ### Fixed
 - Duplicate test function "Test Reset Functionality" removed
@@ -40,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation inconsistencies between README and actual API
 
 ### Removed
-- Duplicate test case that was shadowing another test
+- `Reset()` method (replaced with `ResetState()` for better performance)
 
 ## [0.1.0] - Initial Release
 
