@@ -276,6 +276,36 @@ func (a *Anvil) StopImpersonating(address common.Address) error {
 	return err
 }
 
+// ResetState resets the Anvil state using RPC without restarting the process.
+// This is much faster than Reset() as it doesn't restart the Anvil instance.
+func (a *Anvil) ResetState() error {
+	a.rpcCalls.Add(1)
+	// Call anvil_reset without parameters to reset to genesis state
+	err := a.rpcClient.Call(nil, "anvil_reset")
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to reset state")
+		return fmt.Errorf("failed to reset anvil state: %w", err)
+	}
+	// Reset metrics
+	a.blocksMined.Store(0)
+	a.rpcCalls.Store(1) // 1 for the reset call itself
+	return nil
+}
+
+// Reset restarts the Anvil instance (slower than ResetState)
+func (a *Anvil) Reset() error {
+	// Stop the current instance
+	if err := a.Stop(); err != nil {
+		return fmt.Errorf("failed to stop anvil: %w", err)
+	}
+
+	// Wait for cleanup
+	time.Sleep(time.Second * 2)
+
+	// Start a new instance
+	return a.Start()
+}
+
 // Close performs a clean shutdown of all resources
 func (a *Anvil) Close() error {
 	a.logger.Debug().Msg("Shutting down Anvil instance")
@@ -330,20 +360,6 @@ func (a *Anvil) Metrics() AnvilMetrics {
 		LastError:     a.metrics.LastError,
 		LastErrorTime: a.metrics.LastErrorTime,
 	}
-}
-
-// Reset restarts the Anvil instance
-func (a *Anvil) Reset() error {
-	// Stop the current instance
-	if err := a.Stop(); err != nil {
-		return fmt.Errorf("failed to stop anvil: %w", err)
-	}
-
-	// Wait for cleanup
-	time.Sleep(time.Second * 2)
-
-	// Start a new instance
-	return a.Start()
 }
 
 // WaitForBlock waits for a specific block number
