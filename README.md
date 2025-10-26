@@ -1,174 +1,227 @@
-# Anvil Test Client
+# go-anvil
 
-A robust Go package for managing Anvil, a blazing-fast local Ethereum development environment. This package provides a powerful interface for programmatic control of Anvil nodes during testing and development.
+[![CI](https://github.com/neverDefined/go-anvil/workflows/CI/badge.svg)](https://github.com/neverDefined/go-anvil/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/neverDefined/go-anvil)](https://goreportcard.com/report/github.com/neverDefined/go-anvil)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Overview
+A Go client library for programmatic control of [Anvil](https://book.getfoundry.sh/anvil/), Foundry's local Ethereum test node. Provides a clean interface for managing test environments, manipulating blockchain state, and controlling time and accounts during development.
 
-Anvil is Foundry's local testnet node implementation, similar to Ganache. This package provides:
-- Full programmatic control over local Ethereum networks
-- Comprehensive testing utilities
-- Thread-safe metrics collection
-- Configurable logging and error handling
+## Features
+
+- Full programmatic control over Anvil nodes
 - Builder pattern for flexible configuration
-
-## Prerequisites
-
-- [Foundry](https://book.getfoundry.sh/) installed on your system
-- Go 1.19 or later
+- Chain manipulation (mining, time travel, snapshots)
+- Account management and impersonation
+- Thread-safe metrics collection
+- Fast state reset using RPC calls
+- Comprehensive test coverage
 
 ## Installation
 
-1. Install Foundry (which includes Anvil):
 ```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
+go get github.com/neverDefined/go-anvil
 ```
 
-2. Import the package:
-```go
-import "github.com/neverDefined/go-anvil/anvil"
-```
+**Prerequisites:**
+- [Foundry](https://book.getfoundry.sh/) must be installed on your system
+- Go 1.19 or later
 
-## Core Features
+## Quick Start
 
-### 1. Basic Node Management
 ```go
-// Create and start a node with default configuration
-anvil, err := anvil.NewAnvil()
-if err != nil {
-    log.Fatal(err)
+package main
+
+import (
+    "log"
+    "math/big"
+    
+    "github.com/neverDefined/go-anvil"
+    "github.com/ethereum/go-ethereum/common"
+)
+
+func main() {
+    // Create and start an Anvil instance
+    anvil, err := anvil.NewAnvil()
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    err = anvil.Start()
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer anvil.Close()
+    
+    // Get Ethereum clients
+    ethClient := anvil.Client()
+    rpcClient := anvil.RPCClient()
+    
+    // Use the clients for testing
+    blockNumber, _ := ethClient.BlockNumber(context.Background())
+    log.Printf("Current block: %d", blockNumber)
 }
-err = anvil.Start()
-defer anvil.Close()
-
-// Access clients
-ethClient := anvil.Client()
-rpcClient := anvil.RPCClient()
 ```
 
-### 2. Builder Pattern Configuration
+## Configuration
+
+### Builder Pattern
+
+Use the builder pattern for custom configuration:
+
 ```go
 anvil, err := anvil.NewAnvilBuilder().
-    WithBlockTime("1").
-    WithChainID("1337").
-    WithGasLimit("12000000").
-    WithPort("8545").
-    WithLogLevel(zerolog.InfoLevel).
-    WithFork("https://eth-mainnet.alchemyapi.io/v2/KEY").
-    WithForkBlockNumber("15000000").
+    WithBlockTime("1").              // Block time in seconds
+    WithChainID("1337").              // Custom chain ID
+    WithGasLimit("12000000").         // Block gas limit
+    WithPort("8545").                 // RPC port
+    WithLogLevel(zerolog.InfoLevel).  // Logging level
+    WithFork("https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY").
+    WithForkBlockNumber("15000000").  // Fork from specific block
     Build()
 ```
 
-### 3. Chain Manipulation
+### Available Options
+
+- `WithBlockTime(seconds)` - Set automatic block mining interval
+- `WithChainID(id)` - Set the chain ID
+- `WithGasLimit(limit)` - Set the block gas limit
+- `WithGasPrice(price)` - Set the gas price
+- `WithPort(port)` - Set the RPC port
+- `WithFork(url)` - Fork from a remote network
+- `WithForkBlockNumber(number)` - Fork from a specific block
+- `WithLogLevel(level)` - Set logging verbosity
+
+## Usage Examples
+
+### Block Mining
+
 ```go
-// Block operations
-anvil.MineBlock()
-anvil.WaitForBlock(10, 5*time.Second)
+// Mine a single block
+err := anvil.MineBlock()
 
-// Time manipulation
-anvil.IncreaseTime(3600)
-anvil.SetNextBlockTimestamp(time.Now().Unix())
+// Mine multiple blocks
+err = anvil.Mine(5, 0)  // Mine 5 blocks with default timestamps
 
-// Account operations
-keys, addresses, _ := anvil.Accounts()
-anvil.SetBalance(address, big.NewInt(100))
-anvil.Impersonate(address)
-anvil.StopImpersonating(address)
+// Mine with specific timestamp
+timestamp := uint64(time.Now().Unix())
+err = anvil.Mine(1, timestamp)
+
+// Wait for a specific block
+err = anvil.WaitForBlock(10, 5*time.Second)
 ```
 
-### 4. Metrics Collection
+### Time Manipulation
+
 ```go
-metrics := anvil.Metrics()
-fmt.Printf("Blocks mined: %d\n", metrics.BlocksMined)
-fmt.Printf("RPC calls: %d\n", metrics.RPCCalls)
-fmt.Printf("Startup time: %v\n", metrics.StartupTime)
+// Increase time by 1 hour
+err := anvil.IncreaseTime(3600)
+
+// Set timestamp for next block
+err = anvil.SetNextBlockTimestamp(time.Now().Unix())
 ```
 
-## Default Test Accounts
-
-The package provides predefined test accounts:
+### Account Management
 
 ```go
-var AnvilPrivateKeys = [...]AnvilPrivateKey{
-    "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-    "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-    "5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-}
-
-// Access accounts
+// Get default test accounts
 keys, addresses, err := anvil.Accounts()
-```
 
-## Advanced Features
+// Set account balance
+address := common.HexToAddress("0x...")
+err = anvil.SetBalance(address, big.NewInt(1e18))  // 1 ETH
+
+// Impersonate an account (send transactions without private key)
+err = anvil.Impersonate(address)
+// ... send transactions as this address
+err = anvil.StopImpersonating(address)
+
+// Set account nonce
+err = anvil.SetNonce(address, 42)
+```
 
 ### State Management
+
 ```go
-// Reset chain state (fast - uses RPC call, doesn't restart process)
+// Reset to initial state (fast - uses RPC)
 err := anvil.ResetState()
 
-// Wait for specific block
-err = anvil.WaitForBlock(targetBlock, 30*time.Second)
-
-// Snapshot and revert state
+// Create a snapshot
 snapshotID, err := anvil.Snapshot()
+
+// Revert to snapshot
 success, err := anvil.Revert(snapshotID)
 ```
 
-### Configuration Management
+### Advanced Operations
+
 ```go
-// Custom configuration
-config := anvil.AnvilConfig{
-    DefaultTimeout: 15 * time.Second,
-    MaxRetries:     10,
-    RetryInterval:  200 * time.Millisecond,
-    LogLevel:       zerolog.DebugLevel,
-}
+// Set bytecode at address
+err := anvil.SetCode(address, "0x6080604052...")
+
+// Modify storage slot
+err = anvil.SetStorageAt(address, slot, value)
+
+// Control mining
+err = anvil.SetAutomine(false)  // Disable automatic mining
+err = anvil.SetIntervalMining(5)  // Mine every 5 seconds
+
+// Enable auto-impersonation
+err = anvil.AutoImpersonate(true)
+
+// Drop pending transaction
+err = anvil.DropTransaction(txHash)
 ```
 
-## Best Practices
+### Metrics
 
-1. Use defer for cleanup:
-```go
-anvil, _ := anvil.NewAnvil()
-err := anvil.Start()
-defer anvil.Close()
-```
-
-2. Handle errors with retries:
-```go
-err := retry(5, time.Second, func() error {
-    return someOperation()
-})
-```
-
-3. Configure logging appropriately:
-```go
-anvil, _ := anvil.NewAnvilBuilder().
-    WithLogLevel(zerolog.DebugLevel).
-    Build()
-```
-
-4. Monitor metrics:
 ```go
 metrics := anvil.Metrics()
-if metrics.LastError != nil {
-    log.Printf("Last error: %v at %v", metrics.LastError, metrics.LastErrorTime)
-}
+fmt.Printf("Startup time: %v\n", metrics.StartupTime)
+fmt.Printf("Blocks mined: %d\n", metrics.BlocksMined)
+fmt.Printf("RPC calls: %d\n", metrics.RPCCalls)
 ```
 
 ## Testing
 
-The package includes comprehensive tests covering:
-- Basic node operations
-- Account management
-- Time manipulation
-- Balance modification
-- Account impersonation
-- Metrics collection
-- Error handling
-- State reset functionality
-- Snapshot and revert operations
+The library includes comprehensive tests. Use the shared instance pattern for faster test execution:
 
-The test suite uses a shared Anvil instance with `ResetState()` between tests for faster execution.
+```go
+func TestMyContract(t *testing.T) {
+    // Create shared instance once
+    anvil, _ := anvil.NewAnvil()
+    anvil.Start()
+    defer anvil.Close()
+    
+    t.Run("test case 1", func(t *testing.T) {
+        // Reset state before each test
+        anvil.ResetState()
+        // ... your test
+    })
+    
+    t.Run("test case 2", func(t *testing.T) {
+        anvil.ResetState()
+        // ... your test
+    })
+}
+```
 
-See `anvil_test.go` for detailed testing examples.
+## API Documentation
+
+Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/neverDefined/go-anvil).
+
+## Development
+
+```bash
+# Run tests
+make test
+
+# Run linter
+make lint
+
+# Run all checks
+make check
+```
+
+## License
+
+MIT
