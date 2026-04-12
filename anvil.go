@@ -114,12 +114,14 @@ type Anvil struct {
 	cancel      context.CancelFunc
 	args        []string
 	rpcURL      string
-	logger      zerolog.Logger
-	metrics     AnvilMetrics
-	blocksMined atomic.Uint64
-	rpcCalls    atomic.Int64
-	closeOnce   sync.Once
-	stopOnce    sync.Once
+	logger           zerolog.Logger
+	metrics          AnvilMetrics
+	blocksMined      atomic.Uint64
+	rpcCalls         atomic.Int64
+	closeOnce        sync.Once
+	stopOnce         sync.Once
+	initialSnapshot  string
+	snapshotInitOnce sync.Once
 }
 
 // NewAnvil creates a new Anvil instance with default configuration.
@@ -568,17 +570,45 @@ func (a *Anvil) Metrics() AnvilMetrics {
 	}
 }
 
-// ResetState resets the Anvil blockchain state to its initial values without restarting the process.
-// This is much faster than stopping and starting the instance. All balances, contracts,
-// and state will be reset to initial values, but the Anvil process continues running.
+// ResetState resets the Anvil blockchain state to its initial values.
+// On the first call, it takes a snapshot of the initial state.
+// On subsequent calls, it reverts to that snapshot and takes a new one.
+// This is much faster than restarting the process.
 // Returns an error if the RPC call fails.
 func (a *Anvil) ResetState() error {
-	a.rpcCalls.Add(1)
-	err := a.rpcClient.Call(nil, "anvil_reset")
-	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to reset state")
+	var initErr error
+	
+	// Take initial snapshot on first call
+	a.snapshotInitOnce.Do(func() {
+		a.initialSnapshot, initErr = a.Snapshot()
+		if initErr != nil {
+			a.logger.Error().Err(initErr).Msg("Failed to take initial snapshot")
+		}
+	})
+	
+	if initErr != nil {
+		return initErr
 	}
-	return err
+	
+	// Revert to initial snapshot
+	success, err := a.Revert(a.initialSnapshot)
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to revert to initial snapshot")
+		return err
+	}
+	
+	if !success {
+		return fmt.Errorf("failed to revert to initial snapshot")
+	}
+	
+	// Take a new snapshot for next reset
+	a.initialSnapshot, err = a.Snapshot()
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to take new snapshot after reset")
+		return err
+	}
+	
+	return nil
 }
 
 // WaitForBlock waits for the blockchain to reach a specific block number.
