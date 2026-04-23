@@ -9,7 +9,6 @@ This project adopts the **Contributor Covenant, version 2.1**, by reference:
 
 Reports of conduct concerns should be sent privately to:
 
-- Email: <samsonm2050@gmail.com>
 - Subject line: `[go-anvil conduct]`
 
 A single maintainer reviews reports; responses are best-effort with a target acknowledgement of 7 days.
