@@ -64,6 +64,17 @@ func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
 
 **CHANGELOG.** User-visible changes go under `## [Unreleased]` in `CHANGELOG.md`, Keep-a-Changelog format.
 
+## Claude Code tools in this repo
+
+Project-specific subagents and slash commands live in `.claude/`. Invoke them instead of reinventing the wheel.
+
+- **`@anvil-reviewer`** (`.claude/agents/anvil-reviewer.md`) — reviews a PR or working-tree diff against the conventions on this page. Use before merging or as a self-check before committing.
+- **`@release-drafter`** (`.claude/agents/release-drafter.md`) — walks `git log` since the last tag and drafts the CHANGELOG entry plus GitHub release notes. Use when preparing a release cut.
+- **`/new-rpc <MethodName> <rpc_method> [<params>]`** (`.claude/commands/new-rpc.md`) — scaffolds a new RPC wrapper on `*Anvil` matching the shape above, plus integration and unit-test stubs.
+- **`/bump-foundry`** (`.claude/commands/bump-foundry.md`) — checks for a newer stable Foundry release than the version pinned in `ci.yml`, drafts the one-line diff, and optionally opens a PR.
+
+Shared permissions live in `.claude/settings.json` (conservative read-only allowlist). Per-machine overrides go in `.claude/settings.local.json` (globally gitignored).
+
 ## Out of scope
 
 - Adding a non-anvil execution client, node type, or unrelated blockchain tooling — this library is anvil-only.

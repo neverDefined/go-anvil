@@ -95,12 +95,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builder validation, `resolveAnvilPath` with temp-dir fixtures, the `retry` helper,
   `errors.Is` wrapping for every sentinel, and RPC method shape via `httptest`-backed JSON-RPC
   server. Contributors without Foundry can run `go test -run '^Test(AnvilBuilder|ResolveAnvilPath|Retry|SentinelErrors|RPC)' ./...`.
-- Added integration subtests for the startup-timeout path (`ErrStartupTimeout`), ctx-cancelled
+- Added integration subtests for the startup-timeout path (`ErrStartupTimeout`), ctx-canceled
   RPC call, and 50-goroutine concurrent-stress test that exercises atomics and `-race`.
 - Added `fork_test.go` behind a `//go:build fork` tag; reads `ETH_RPC_URL` and skips cleanly
   when unset. Exercises `WithFork` and `WithForkBlockNumber`.
 - Added `anvil_bench_test.go` with `BenchmarkMineBlock`, `BenchmarkSetBalance`,
   `BenchmarkSnapshotRevertCycle`, and `BenchmarkResetState` for tracking RPC-latency regressions.
+
+### Claude Code tooling
+- Added `.claude/agents/anvil-reviewer.md` — subagent that reviews PRs and working-tree diffs
+  against this repo's conventions (context-first RPC methods, shared-anvil test pattern,
+  error wrapping, godoc-on-exports).
+- Added `.claude/agents/release-drafter.md` — subagent that walks `git log` since the last tag
+  and drafts the CHANGELOG entry plus GitHub release notes following Keep-a-Changelog.
+- Added `.claude/commands/new-rpc.md` — slash command scaffolding a new RPC wrapper method on
+  `*Anvil` matching the repo template, plus integration and unit-test stubs.
+- Added `.claude/commands/bump-foundry.md` — slash command that checks for newer stable
+  Foundry releases, drafts the `ci.yml` diff, and optionally opens a PR.
+- `CLAUDE.md` documents the full set.
 
 ### Fixed
 - Duplicate test function "Test Reset Functionality" removed
