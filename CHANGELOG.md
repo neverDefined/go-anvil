@@ -7,45 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-23
+
+First tagged release. Captures the full feature set built over phases 0–3 of the maintainer roadmap (tracking issue #12), plus the original pre-roadmap work.
+
 ### Added
-- Comprehensive godoc comments for all exported functions and types
-- Custom error types for better error handling (`ErrNotStarted`, `ErrConnectionFailed`, etc.)
-- Thread-safe resource cleanup using `sync.Once` pattern
-- Snapshot and Revert RPC methods for state management
-- `ResetState()` method for fast state reset using RPC (replaces `Reset()`)
-- Additional Anvil RPC methods:
-  - `SetCode()` - Set bytecode at an address
-  - `SetStorageAt()` - Set storage slot values
-  - `SetNonce()` - Set account nonce
-  - `Mine()` - Mine multiple blocks at once
-  - `DropTransaction()` - Remove transaction from mempool
-  - `SetAutomine()` - Enable/disable automatic mining
-  - `SetIntervalMining()` - Set interval mining
-  - `AutoImpersonate()` - Enable auto-impersonation
-  - `ResetFork()` - Reset fork to a new state
-- Development tooling:
-  - `.golangci.yml` linter configuration
-  - GitHub Actions CI/CD pipeline
-  - Comprehensive Makefile with common commands
-- Documentation improvements in README.md
-- Shared Anvil instance pattern in tests for significantly faster test execution
+
+- Core Anvil instance management: `NewAnvil`, `NewAnvilBuilder`, `Start`, `Stop`, `Close`.
+- Builder pattern with 9 options: `WithBlockTime`, `WithFork`, `WithForkBlockNumber`, `WithPort`, `WithChainID`, `WithGasLimit`, `WithGasPrice`, `WithLogLevel`, `WithStartupTimeout`.
+- RPC wrappers (all context-first): `MineBlock`, `Mine`, `SetNextBlockTimestamp`, `IncreaseTime`, `SetBalance`, `Impersonate`, `StopImpersonating`, `AutoImpersonate`, `Snapshot`, `Revert`, `ResetState`, `SetCode`, `SetStorageAt`, `SetNonce`, `DropTransaction`, `SetAutomine`, `SetIntervalMining`, `ResetFork`.
+- `WaitForBlock(number, timeout)` — polls the chain head with a context-backed deadline.
+- `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` — method form of the old free helper; respects both ctx deadline and explicit timeout.
+- `Accounts()` returns the default test keys and addresses.
+- `Client()`, `RPCClient()`, `Metrics()` accessors. `AnvilMetrics` covers startup time, blocks mined, RPC calls.
+- Sentinel errors: `ErrNotStarted`, `ErrAlreadyStarted`, `ErrConnectionFailed`, `ErrProcessNotFound`, `ErrInvalidConfig`, `ErrRPCCallFailed`, `ErrAnvilNotFound`, `ErrAnvilNotExecutable`, `ErrStartupTimeout`.
+- `DefaultConfig` and `DefaultStartupTimeout` (5s) for tuning.
+- Readiness probe in `Start()` polls the RPC endpoint every 50ms until it responds, capped by `WithStartupTimeout`. Replaces the original hard-coded 2-second sleep.
+- Subprocess stdout/stderr routed through the instance's zerolog logger (DEBUG / WARN with `stream="..."` tags) instead of leaking to the parent process.
+- Executable check on the Foundry fallback path (`$XDG_CONFIG_HOME/.foundry/bin/anvil` → `~/.foundry/bin/anvil`); returns `ErrAnvilNotFound` or `ErrAnvilNotExecutable` with context.
+- Thread-safe metrics via `atomic.Uint64` / `atomic.Int64`; idempotent `Close()`/`Stop()` via `sync.Once`.
+- Snapshot-based fast state reset: `ResetState(ctx)` takes a snapshot on first call, then reverts + re-snapshots on subsequent calls — ~10× faster than restarting the anvil process.
+
+### Tests
+
+- Integration suite (`anvil_test.go`) using the shared-anvil pattern: one `anvil` instance per `TestAnvil` run, `ResetState` between subtests. 24 subtests covering the full RPC surface, builder options, close/stop idempotence, startup timeout, ctx cancellation, and 50-goroutine concurrent stress.
+- Unit tests (`anvil_unit_test.go`) requiring neither Foundry nor a live anvil: builder validation, `resolveAnvilPath` with temp-dir fixtures, `retry` helper, `errors.Is` propagation for every sentinel, and RPC method shape via an `httptest` JSON-RPC server.
+- Fork-mode tests (`fork_test.go`) behind the `fork` build tag; skipped when `ETH_RPC_URL` is unset. Exercises `WithFork` and `WithForkBlockNumber`.
+- Benchmarks (`anvil_bench_test.go`): `BenchmarkMineBlock`, `BenchmarkSetBalance`, `BenchmarkSnapshotRevertCycle`, `BenchmarkResetState`.
+
+### CI / tooling
+
+- Matrix test job across `(ubuntu-latest, macos-latest) × (go 1.25, 1.26)`; `fail-fast: false`. Coverage generated every slot; uploaded to Codecov from the primary slot.
+- `govulncheck` and `golangci-lint` (v2) as separate jobs.
+- Foundry pinned to `v1.5.1` via `foundry-rs/foundry-toolchain@v1`.
+- `.github/dependabot.yml` — weekly gomod + github-actions updates; ignores go-ethereum major bumps.
+- `.github/workflows/release.yml` — tag-triggered release workflow creates a GitHub release with auto-generated notes from merged PRs since the last tag.
+- Structured `.github/ISSUE_TEMPLATE/` (bug + feature forms; `config.yml` disables blank issues); `.github/PULL_REQUEST_TEMPLATE.md` checklist; `.github/CODEOWNERS`.
+- `CONTRIBUTING.md` with local workflow, branch + commit conventions (Conventional Commits), PR checklist, and unit-only / fork-mode test invocations.
+- `CLAUDE.md` with non-obvious repo conventions for Claude Code sessions.
+- Shared `.claude/settings.json` with a conservative read-only permission allowlist.
+- Claude Code subagents: `.claude/agents/anvil-reviewer.md` (reviews PRs against repo conventions), `.claude/agents/release-drafter.md` (drafts CHANGELOG + release notes from git log).
+- Claude Code slash commands: `.claude/commands/new-rpc.md` (scaffold new RPC wrapper + test stubs), `.claude/commands/bump-foundry.md` (check for newer stable Foundry and draft the ci.yml diff).
 
 ### Changed
-- Package name from `main` to `anvil` (proper library package)
-- Module path to `github.com/neverDefined/go-anvil`
-- README.md import paths and API examples to match actual implementation
-- `Start()` method no longer takes timeout parameter (uses internal retry logic)
-- **BREAKING**: `Reset()` method replaced with `ResetState()` that uses RPC instead of process restart
-- Test suite now uses shared Anvil instance with `ResetState()` between tests (much faster)
-- **BREAKING**: All mutating RPC methods now take `context.Context` as their first parameter.
-  Callers gain cancellation and timeout support on every RPC call; a hung RPC no longer blocks
-  the caller indefinitely. Affected methods: `MineBlock`, `SetNextBlockTimestamp`, `IncreaseTime`,
-  `SetBalance`, `Impersonate`, `StopImpersonating`, `Snapshot`, `Revert`, `SetCode`,
-  `SetStorageAt`, `SetNonce`, `Mine`, `DropTransaction`, `SetAutomine`, `SetIntervalMining`,
-  `AutoImpersonate`, `ResetFork`, `ResetState`. The `EthereumTestEnvironment` interface is
-  updated to match.
 
-  Migration:
+- Package renamed from `main` to `anvil`. Module path: `github.com/neverDefined/go-anvil`.
+- `Start()` no longer takes a timeout parameter; tuning is via `WithStartupTimeout` on the builder.
+- **BREAKING vs pre-roadmap:** `Reset()` replaced by `ResetState(ctx)` which uses an RPC snapshot/revert loop instead of restarting the process.
+- **BREAKING vs pre-roadmap:** every mutating RPC method now takes `ctx context.Context` as the first parameter and forwards via `a.rpcClient.CallContext(ctx, ...)`. Migration:
+
   ```go
   // before
   anvil.MineBlock()
@@ -57,87 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anvil.SetBalance(ctx, addr, bal)
   ```
 
-### Added
-- `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` — replaces the free function `MemPoolEmpty`
-  with a context-aware method that respects both the caller's ctx deadline and an explicit
-  timeout.
-- `AnvilBuilder.WithStartupTimeout(d)` builder option; `DefaultStartupTimeout` (5s) constant.
-- Sentinel errors: `ErrAnvilNotFound` (binary not on PATH or at Foundry fallback),
-  `ErrAnvilNotExecutable` (binary found but lacks execute bit), `ErrStartupTimeout`
-  (anvil did not become ready within the configured ceiling).
-
-### Changed
-- `Start()` replaces the hard-coded 2-second pre-connect sleep with a readiness probe
-  that polls the RPC endpoint every 50ms and returns on the first successful response,
-  capped by the new `WithStartupTimeout` ceiling (default 5s). Typical startup is now
-  measurably faster; slow CI runners get longer headroom by setting a higher timeout.
-- Subprocess stdout/stderr are now routed through the instance's zerolog logger
-  (stdout at DEBUG, stderr at WARN, both tagged `stream="..."`) instead of leaking to
-  the parent's `os.Stdout`/`os.Stderr`. Cleaner test output; consumers can silence via
-  `WithLogLevel(zerolog.Disabled)`.
-- When `anvil` isn't on `PATH`, the Foundry fallback path (`$XDG_CONFIG_HOME/.foundry/bin/anvil`
-  or `~/.foundry/bin/anvil`) is now stat'd and checked for the execute bit before launch.
-  Callers get `ErrAnvilNotFound` or `ErrAnvilNotExecutable` instead of an opaque
-  `exec.Cmd.Start` failure.
-
-### Removed
-- `EthereumTestEnvironment` interface — it was defined but never used as an injection
-  point anywhere in the codebase. Consumers who want to mock `*Anvil` in their own tests
-  should declare their own interfaces at the consumption site (accept interfaces, return
-  concrete types).
+  The `EthereumTestEnvironment` interface was updated to match, then removed (see below).
 
 ### Deprecated
-- Free function `MemPoolEmpty(ctx, client)` — use `(*Anvil).WaitForMemPoolEmpty` instead.
-  Will be removed in a future release.
 
-### Tests
-- Added `anvil_unit_test.go`: pure-Go unit tests (no live anvil / no Foundry required) covering
-  builder validation, `resolveAnvilPath` with temp-dir fixtures, the `retry` helper,
-  `errors.Is` wrapping for every sentinel, and RPC method shape via `httptest`-backed JSON-RPC
-  server. Contributors without Foundry can run `go test -run '^Test(AnvilBuilder|ResolveAnvilPath|Retry|SentinelErrors|RPC)' ./...`.
-- Added integration subtests for the startup-timeout path (`ErrStartupTimeout`), ctx-canceled
-  RPC call, and 50-goroutine concurrent-stress test that exercises atomics and `-race`.
-- Added `fork_test.go` behind a `//go:build fork` tag; reads `ETH_RPC_URL` and skips cleanly
-  when unset. Exercises `WithFork` and `WithForkBlockNumber`.
-- Added `anvil_bench_test.go` with `BenchmarkMineBlock`, `BenchmarkSetBalance`,
-  `BenchmarkSnapshotRevertCycle`, and `BenchmarkResetState` for tracking RPC-latency regressions.
-
-### Claude Code tooling
-- Added `.claude/agents/anvil-reviewer.md` — subagent that reviews PRs and working-tree diffs
-  against this repo's conventions (context-first RPC methods, shared-anvil test pattern,
-  error wrapping, godoc-on-exports).
-- Added `.claude/agents/release-drafter.md` — subagent that walks `git log` since the last tag
-  and drafts the CHANGELOG entry plus GitHub release notes following Keep-a-Changelog.
-- Added `.claude/commands/new-rpc.md` — slash command scaffolding a new RPC wrapper method on
-  `*Anvil` matching the repo template, plus integration and unit-test stubs.
-- Added `.claude/commands/bump-foundry.md` — slash command that checks for newer stable
-  Foundry releases, drafts the `ci.yml` diff, and optionally opens a PR.
-- `CLAUDE.md` documents the full set.
-
-### Fixed
-- Duplicate test function "Test Reset Functionality" removed
-- Resource cleanup now thread-safe with `sync.Once`
-- Documentation inconsistencies between README and actual API
+- Free function `MemPoolEmpty(ctx, client)` — use `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` instead. Will be removed in a future release.
 
 ### Removed
-- `Reset()` method (replaced with `ResetState()` for better performance)
 
-## [0.1.0] - Initial Release
+- `EthereumTestEnvironment` interface — was defined but never used as an injection point. Consumers who want to mock `*Anvil` in their own tests should declare their own narrow interfaces at the consumption site.
+- `Reset()` — replaced by `ResetState(ctx)`.
 
-### Added
-- Basic Anvil instance management (Start, Stop, Close)
-- Builder pattern for flexible configuration
-- Core RPC methods:
-  - Block mining (`MineBlock`)
-  - Time manipulation (`IncreaseTime`, `SetNextBlockTimestamp`)
-  - Balance management (`SetBalance`)
-  - Account impersonation (`Impersonate`, `StopImpersonating`)
-- Default test account support
-- Metrics collection (startup time, blocks mined, RPC calls)
-- Helper function for mempool monitoring
-- Comprehensive test suite
-- MIT License
+### Fixed
+
+- Leaked `context.CancelFunc` in `Build()` — was stored on `Anvil.cancel` but never invoked. `Stop()` now calls it (with `Close()` delegating to `Stop()`), so the context — and its bound anvil subprocess via `exec.CommandContext` — shuts down cleanly.
 
 [Unreleased]: https://github.com/neverDefined/go-anvil/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/neverDefined/go-anvil/releases/tag/v0.1.0
-
