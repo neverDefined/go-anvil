@@ -1,6 +1,7 @@
 # go-anvil
 
 [![CI](https://github.com/neverDefined/go-anvil/workflows/CI/badge.svg)](https://github.com/neverDefined/go-anvil/actions)
+[![codecov](https://codecov.io/gh/neverDefined/go-anvil/branch/main/graph/badge.svg)](https://codecov.io/gh/neverDefined/go-anvil)
 [![Go Report Card](https://goreportcard.com/badge/github.com/neverDefined/go-anvil)](https://goreportcard.com/report/github.com/neverDefined/go-anvil)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
