@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/ethereum/go-ethereum v1.17.2
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
 )
 
