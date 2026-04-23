@@ -36,6 +36,18 @@ make test-coverage # HTML coverage report
 
 Tests require `anvil` on `PATH`. If you don't have Foundry installed, `make check-foundry` will tell you so.
 
+To run only the pure-Go unit tests (no live anvil, no Foundry required):
+
+```
+go test -run '^Test(AnvilBuilder|ResolveAnvilPath|Retry|SentinelErrors|RPC)' ./...
+```
+
+Fork-mode tests are gated behind a `fork` build tag and require `ETH_RPC_URL`:
+
+```
+ETH_RPC_URL=https://... go test -tags=fork -run Fork ./...
+```
+
 ## Branch naming
 
 Use a prefix that reflects the nature of the change. Examples:
