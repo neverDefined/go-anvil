@@ -4,9 +4,11 @@
 package anvil
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"os/exec"
@@ -42,6 +44,15 @@ var (
 
 	// ErrRPCCallFailed indicates an RPC call to Anvil failed
 	ErrRPCCallFailed = fmt.Errorf("anvil: RPC call failed")
+
+	// ErrAnvilNotFound indicates the anvil binary could not be located on PATH or at the Foundry fallback path
+	ErrAnvilNotFound = fmt.Errorf("anvil: binary not found")
+
+	// ErrAnvilNotExecutable indicates the anvil binary was located but is not executable
+	ErrAnvilNotExecutable = fmt.Errorf("anvil: binary not executable")
+
+	// ErrStartupTimeout indicates anvil did not become ready within the configured startup timeout
+	ErrStartupTimeout = fmt.Errorf("anvil: startup timeout exceeded")
 )
 
 // AnvilConfig holds the configuration for Anvil client
@@ -68,6 +79,11 @@ var DefaultConfig = AnvilConfig{
 	LogLevel:       zerolog.InfoLevel,
 }
 
+// DefaultStartupTimeout is the default ceiling for waiting on anvil to become ready.
+// The readiness probe polls on a short interval and returns on the first successful RPC,
+// so typical startup completes well before this deadline.
+const DefaultStartupTimeout = 5 * time.Second
+
 // AnvilMetrics contains runtime metrics for the Anvil instance
 //
 //nolint:revive // Name is intentionally prefixed for clarity
@@ -91,22 +107,6 @@ var AnvilPrivateKeys = [...]AnvilPrivateKey{
 	"5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
 }
 
-// EthereumTestEnvironment defines the interface for Ethereum test environments.
-// Mutating RPC methods take a context.Context as the first parameter for cancellation
-// and timeout support.
-type EthereumTestEnvironment interface {
-	Start() error
-	Stop() error
-	Client() *ethclient.Client
-	RPCClient() *rpc.Client
-	MineBlock(ctx context.Context) error
-	SetNextBlockTimestamp(ctx context.Context, timestamp int64) error
-	IncreaseTime(ctx context.Context, seconds int64) error
-	SetBalance(ctx context.Context, address common.Address, balance *big.Int) error
-	Impersonate(ctx context.Context, address common.Address) error
-	StopImpersonating(ctx context.Context, address common.Address) error
-}
-
 // Anvil represents a local Ethereum test environment
 type Anvil struct {
 	context          context.Context
@@ -116,6 +116,7 @@ type Anvil struct {
 	cancel           context.CancelFunc
 	args             []string
 	rpcURL           string
+	startupTimeout   time.Duration
 	logger           zerolog.Logger
 	metrics          AnvilMetrics
 	blocksMined      atomic.Uint64
@@ -134,61 +135,118 @@ func NewAnvil() (*Anvil, error) {
 }
 
 // Start initializes and starts the Anvil process.
-// It locates the Anvil binary, starts the process, and establishes connections
-// to both the RPC and Ethereum clients. The method will retry connection attempts
-// up to 5 times with exponential backoff. If the connection fails after all retries,
-// the Anvil process will be stopped automatically.
-// Returns an error if the process fails to start or if connections cannot be established.
+// It locates the Anvil binary, starts the process, routes subprocess stdout/stderr
+// through the instance logger, and polls the RPC endpoint until it responds or the
+// configured startup timeout is exceeded. If readiness is not reached in time,
+// the anvil process is stopped and an error is returned.
 func (a *Anvil) Start() error {
 	startTime := time.Now()
 
-	// Look for anvil in PATH first, then fall back to standard Foundry location
-	anvilPath, err := exec.LookPath("anvil")
+	anvilPath, err := resolveAnvilPath()
 	if err != nil {
-		// Fallback: try the standard Foundry location
-		homeDir := os.Getenv("XDG_CONFIG_HOME")
-		if homeDir == "" {
-			homeDir, err = os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("failed to get home directory: %w", err)
-			}
-		}
-		anvilPath = filepath.Join(homeDir, ".foundry", "bin", "anvil")
+		return err
 	}
 
-	a.cmd = exec.CommandContext(a.context, anvilPath, a.args...) //nolint:gosec // anvilPath is validated
+	a.cmd = exec.CommandContext(a.context, anvilPath, a.args...) //nolint:gosec // anvilPath is resolved via PATH lookup or verified executable at the Foundry fallback
 
-	// Capture stdout and stderr
-	a.cmd.Stdout = os.Stdout
-	a.cmd.Stderr = os.Stderr
+	// Route subprocess stdout/stderr through the instance logger instead of leaking
+	// to os.Stdout/os.Stderr. Scanner goroutines exit when the pipes close on process exit.
+	stdoutPipe, err := a.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+	stderrPipe, err := a.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
 
 	if err := a.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start anvil: %w", err)
 	}
 
-	// Give Anvil time to initialize
-	time.Sleep(2 * time.Second)
+	go a.scanAndLog(stdoutPipe, "stdout", zerolog.DebugLevel)
+	go a.scanAndLog(stderrPipe, "stderr", zerolog.WarnLevel)
 
-	// Try to establish connection with retries
-	err = retry(5, time.Second, func() error {
-		if err := a.connect(); err != nil {
-			a.logger.Debug().Err(err).Msg("Failed to connect, retrying...")
-			return err
+	if err := a.waitForReady(); err != nil {
+		if stopErr := a.Stop(); stopErr != nil {
+			a.logger.Error().Err(stopErr).Msg("Failed to stop anvil after readiness timeout")
 		}
-		return nil
-	})
-	if err != nil {
-		// Stop the Anvil process if connection failed.
-		if err := a.Stop(); err != nil {
-			return fmt.Errorf("failed to stop Anvil: %w", err)
-		}
-
-		// Return the error after stopping the process
-		return fmt.Errorf("failed to establish connection: %w", err)
+		return err
 	}
 
 	a.metrics.StartupTime = time.Since(startTime)
 	return nil
+}
+
+// resolveAnvilPath locates the anvil binary, preferring PATH and falling back to the
+// standard Foundry install location. The fallback path is stat'd and checked for the
+// executable bit so callers receive a clear error instead of an opaque exec failure.
+func resolveAnvilPath() (string, error) {
+	if path, err := exec.LookPath("anvil"); err == nil {
+		return path, nil
+	}
+
+	homeDir := os.Getenv("XDG_CONFIG_HOME")
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+	}
+	anvilPath := filepath.Join(homeDir, ".foundry", "bin", "anvil")
+
+	info, err := os.Stat(anvilPath) //nolint:gosec // path is built from trusted components (home dir + fixed "foundry/bin/anvil")
+	if err != nil {
+		return "", fmt.Errorf("%w at %s: %w", ErrAnvilNotFound, anvilPath, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%w: %s is a directory", ErrAnvilNotExecutable, anvilPath)
+	}
+	if info.Mode()&0o111 == 0 {
+		return "", fmt.Errorf("%w: %s", ErrAnvilNotExecutable, anvilPath)
+	}
+
+	return anvilPath, nil
+}
+
+// scanAndLog reads lines from r and emits them to the instance logger at the given level.
+// It exits when r is closed (subprocess exits or pipe is closed by Stop).
+func (a *Anvil) scanAndLog(r io.ReadCloser, stream string, level zerolog.Level) {
+	defer func() { _ = r.Close() }()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MiB line ceiling
+	for scanner.Scan() {
+		a.logger.WithLevel(level).Str("stream", stream).Msg(scanner.Text())
+	}
+}
+
+// waitForReady polls connect() on a short interval until it succeeds or the startup
+// timeout is exceeded. Returns ErrStartupTimeout if the ceiling is hit.
+func (a *Anvil) waitForReady() error {
+	ctx, cancel := context.WithTimeout(a.context, a.startupTimeout)
+	defer cancel()
+
+	const pollInterval = 50 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	// Try immediately — on fast hardware anvil is often already listening.
+	if err := a.connect(); err == nil {
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w after %s", ErrStartupTimeout, a.startupTimeout)
+		case <-ticker.C:
+			if err := a.connect(); err == nil {
+				return nil
+			}
+			a.logger.Debug().Msg("Anvil not ready yet, retrying")
+		}
+	}
 }
 
 // connect establishes connection to the RPC endpoint
@@ -647,18 +705,20 @@ func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
 //
 //nolint:revive // Name is intentionally prefixed for clarity
 type AnvilBuilder struct {
-	args     []string
-	rpcURL   string
-	logLevel zerolog.Level
+	args           []string
+	rpcURL         string
+	startupTimeout time.Duration
+	logLevel       zerolog.Level
 }
 
 // NewAnvilBuilder creates a new AnvilBuilder with default configuration.
 // Use the With* methods to customize the configuration before calling Build().
 func NewAnvilBuilder() *AnvilBuilder {
 	return &AnvilBuilder{
-		args:     make([]string, 0),
-		rpcURL:   DefaultConfig.DefaultRPCURL,
-		logLevel: DefaultConfig.LogLevel,
+		args:           make([]string, 0),
+		rpcURL:         DefaultConfig.DefaultRPCURL,
+		startupTimeout: DefaultStartupTimeout,
+		logLevel:       DefaultConfig.LogLevel,
 	}
 }
 
@@ -720,6 +780,17 @@ func (b *AnvilBuilder) WithLogLevel(level zerolog.Level) *AnvilBuilder {
 	return b
 }
 
+// WithStartupTimeout sets the ceiling for waiting on anvil to become ready.
+// The readiness probe polls RPC on a short interval and returns on the first successful
+// response, so typical startup completes well before the timeout. A zero or negative
+// value leaves the default (DefaultStartupTimeout). Returns the builder for method chaining.
+func (b *AnvilBuilder) WithStartupTimeout(d time.Duration) *AnvilBuilder {
+	if d > 0 {
+		b.startupTimeout = d
+	}
+	return b
+}
+
 // validate checks the builder configuration
 func (b *AnvilBuilder) validate() error {
 	if b.rpcURL == "" {
@@ -745,11 +816,12 @@ func (b *AnvilBuilder) Build() (*Anvil, error) {
 	}
 
 	return &Anvil{
-		context: ctx,
-		cancel:  cancel,
-		args:    b.args,
-		rpcURL:  b.rpcURL,
-		logger:  logger,
-		metrics: AnvilMetrics{},
+		context:        ctx,
+		cancel:         cancel,
+		args:           b.args,
+		rpcURL:         b.rpcURL,
+		startupTimeout: b.startupTimeout,
+		logger:         logger,
+		metrics:        AnvilMetrics{},
 	}, nil
 }

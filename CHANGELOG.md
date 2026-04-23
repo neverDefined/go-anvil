@@ -61,6 +61,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` — replaces the free function `MemPoolEmpty`
   with a context-aware method that respects both the caller's ctx deadline and an explicit
   timeout.
+- `AnvilBuilder.WithStartupTimeout(d)` builder option; `DefaultStartupTimeout` (5s) constant.
+- Sentinel errors: `ErrAnvilNotFound` (binary not on PATH or at Foundry fallback),
+  `ErrAnvilNotExecutable` (binary found but lacks execute bit), `ErrStartupTimeout`
+  (anvil did not become ready within the configured ceiling).
+
+### Changed
+- `Start()` replaces the hard-coded 2-second pre-connect sleep with a readiness probe
+  that polls the RPC endpoint every 50ms and returns on the first successful response,
+  capped by the new `WithStartupTimeout` ceiling (default 5s). Typical startup is now
+  measurably faster; slow CI runners get longer headroom by setting a higher timeout.
+- Subprocess stdout/stderr are now routed through the instance's zerolog logger
+  (stdout at DEBUG, stderr at WARN, both tagged `stream="..."`) instead of leaking to
+  the parent's `os.Stdout`/`os.Stderr`. Cleaner test output; consumers can silence via
+  `WithLogLevel(zerolog.Disabled)`.
+- When `anvil` isn't on `PATH`, the Foundry fallback path (`$XDG_CONFIG_HOME/.foundry/bin/anvil`
+  or `~/.foundry/bin/anvil`) is now stat'd and checked for the execute bit before launch.
+  Callers get `ErrAnvilNotFound` or `ErrAnvilNotExecutable` instead of an opaque
+  `exec.Cmd.Start` failure.
+
+### Removed
+- `EthereumTestEnvironment` interface — it was defined but never used as an injection
+  point anywhere in the codebase. Consumers who want to mock `*Anvil` in their own tests
+  should declare their own interfaces at the consumption site (accept interfaces, return
+  concrete types).
 
 ### Deprecated
 - Free function `MemPoolEmpty(ctx, client)` — use `(*Anvil).WaitForMemPoolEmpty` instead.
