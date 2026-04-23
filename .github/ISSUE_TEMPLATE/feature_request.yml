@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new capability or API for go-anvil.
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check the pinned roadmap issue to see whether this is already tracked.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem does this solve, and for whom?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: Sketch the method signature, builder option, or behavioural change.
+      render: go
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What have you tried, and why is this the right shape?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This is about wrapping anvil — not about adding a second execution client, node type, or unrelated blockchain tooling.
+          required: true
