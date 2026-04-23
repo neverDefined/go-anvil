@@ -553,6 +553,11 @@ func (a *Anvil) Stop() error {
 			_ = a.cmd.Wait()
 			a.cmd = nil
 		}
+
+		if a.cancel != nil {
+			a.cancel()
+			a.cancel = nil
+		}
 	})
 	return err
 }
@@ -736,7 +741,7 @@ func (b *AnvilBuilder) Build() (*Anvil, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // cancel is stored on Anvil.cancel and invoked in Stop()
 	logger := log.With().Str("component", "anvil").Logger().Level(b.logLevel)
 
 	// Ensure we have host in the URL
