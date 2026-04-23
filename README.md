@@ -24,7 +24,7 @@ go get github.com/neverDefined/go-anvil
 
 **Prerequisites:**
 - [Foundry](https://book.getfoundry.sh/) must be installed on your system
-- Go 1.19 or later
+- Go 1.25 or later
 
 ## Quick Start
 
