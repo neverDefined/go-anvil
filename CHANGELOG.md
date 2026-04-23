@@ -37,6 +37,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Start()` method no longer takes timeout parameter (uses internal retry logic)
 - **BREAKING**: `Reset()` method replaced with `ResetState()` that uses RPC instead of process restart
 - Test suite now uses shared Anvil instance with `ResetState()` between tests (much faster)
+- **BREAKING**: All mutating RPC methods now take `context.Context` as their first parameter.
+  Callers gain cancellation and timeout support on every RPC call; a hung RPC no longer blocks
+  the caller indefinitely. Affected methods: `MineBlock`, `SetNextBlockTimestamp`, `IncreaseTime`,
+  `SetBalance`, `Impersonate`, `StopImpersonating`, `Snapshot`, `Revert`, `SetCode`,
+  `SetStorageAt`, `SetNonce`, `Mine`, `DropTransaction`, `SetAutomine`, `SetIntervalMining`,
+  `AutoImpersonate`, `ResetFork`, `ResetState`. The `EthereumTestEnvironment` interface is
+  updated to match.
+
+  Migration:
+  ```go
+  // before
+  anvil.MineBlock()
+  anvil.SetBalance(addr, bal)
+
+  // after
+  ctx := context.Background() // or t.Context() in tests, or a ctx with timeout
+  anvil.MineBlock(ctx)
+  anvil.SetBalance(ctx, addr, bal)
+  ```
+
+### Added
+- `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` — replaces the free function `MemPoolEmpty`
+  with a context-aware method that respects both the caller's ctx deadline and an explicit
+  timeout.
+
+### Deprecated
+- Free function `MemPoolEmpty(ctx, client)` — use `(*Anvil).WaitForMemPoolEmpty` instead.
+  Will be removed in a future release.
 
 ### Fixed
 - Duplicate test function "Test Reset Functionality" removed

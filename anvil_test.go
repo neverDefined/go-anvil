@@ -1,6 +1,7 @@
 package anvil
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"testing"
@@ -21,18 +22,17 @@ func getTestPort() string {
 	return fmt.Sprintf("%d", testPort)
 }
 
-// setupSharedAnvil creates or reuses a shared Anvil instance and resets its state
+// setupSharedAnvil creates or reuses a shared Anvil instance and resets its state.
 func setupSharedAnvil(t *testing.T, shared *Anvil) *Anvil {
-	// Reset state before each test
 	if shared != nil {
-		err := shared.ResetState()
+		err := shared.ResetState(t.Context())
 		require.NoError(t, err)
 	}
 	return shared
 }
 
-// setupTestAnvil creates a new Anvil instance with custom configuration
-// Use this only for tests that need specific settings (block time, fork, etc.)
+// setupTestAnvil creates a new Anvil instance with custom configuration.
+// Use this only for tests that need specific settings (block time, fork, etc.).
 func setupTestAnvil(t *testing.T, opts ...func(*AnvilBuilder)) *Anvil {
 	builder := NewAnvilBuilder().
 		WithLogLevel(zerolog.Disabled).
@@ -75,6 +75,7 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Basic Anvil Operations", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupTestAnvil(t, func(b *AnvilBuilder) {
 			b.WithBlockTime("1")
 		})
@@ -83,16 +84,16 @@ func TestAnvil(t *testing.T) {
 		require.NotNil(t, client)
 
 		// Get initial block number
-		initialBlockNum, err := client.BlockNumber(anvil.context)
+		initialBlockNum, err := client.BlockNumber(ctx)
 		require.NoError(t, err)
 
 		// Mine exactly one block
-		err = anvil.MineBlock()
+		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
 		// Wait for block to be mined
 		err = retry(5, time.Second, func() error {
-			currentBlock, err := client.BlockNumber(anvil.context)
+			currentBlock, err := client.BlockNumber(ctx)
 			if err != nil {
 				return err
 			}
@@ -108,6 +109,7 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Test Account Management", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Get accounts
@@ -117,30 +119,31 @@ func TestAnvil(t *testing.T) {
 		assert.Len(t, keys, len(AnvilPrivateKeys))
 
 		// Check balance of first account
-		balance, err := anvil.Client().BalanceAt(anvil.context, addresses[0], nil)
+		balance, err := anvil.Client().BalanceAt(ctx, addresses[0], nil)
 		require.NoError(t, err)
 		assert.True(t, balance.Cmp(big.NewInt(0)) > 0)
 	})
 
 	t.Run("Test Time Manipulation", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Get current block
-		block, err := anvil.Client().BlockByNumber(anvil.context, nil)
+		block, err := anvil.Client().BlockByNumber(ctx, nil)
 		require.NoError(t, err)
 		initialTime := block.Time()
 
 		// Increase time by 3600 seconds (1 hour)
-		err = anvil.IncreaseTime(3600)
+		err = anvil.IncreaseTime(ctx, 3600)
 		require.NoError(t, err)
 
 		// Mine a new block to see the time change
-		err = anvil.MineBlock()
+		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second * 2) // Wait for block to be mined
 
-		newBlock, err := anvil.Client().BlockByNumber(anvil.context, nil)
+		newBlock, err := anvil.Client().BlockByNumber(ctx, nil)
 		require.NoError(t, err)
 		newTime := newBlock.Time()
 
@@ -151,6 +154,7 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Test Balance Manipulation", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		_, addresses, err := anvil.Accounts()
@@ -158,31 +162,32 @@ func TestAnvil(t *testing.T) {
 		testAddr := addresses[0]
 
 		newBalance := big.NewInt(123456789)
-		err = anvil.SetBalance(testAddr, newBalance)
+		err = anvil.SetBalance(ctx, testAddr, newBalance)
 		require.NoError(t, err)
 
-		err = anvil.MineBlock()
+		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second * 2) // Wait for block to be mined
 
-		balance, err := anvil.Client().BalanceAt(anvil.context, testAddr, nil)
+		balance, err := anvil.Client().BalanceAt(ctx, testAddr, nil)
 		require.NoError(t, err)
 		assert.Equal(t, newBalance.String(), balance.String())
 	})
 
 	t.Run("Test Account Impersonation", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		testAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 
-		err := anvil.SetBalance(testAddr, big.NewInt(1000000000000000000))
+		err := anvil.SetBalance(ctx, testAddr, big.NewInt(1000000000000000000))
 		require.NoError(t, err)
 
-		err = anvil.Impersonate(testAddr)
+		err = anvil.Impersonate(ctx, testAddr)
 		require.NoError(t, err)
 
-		err = anvil.StopImpersonating(testAddr)
+		err = anvil.StopImpersonating(ctx, testAddr)
 		require.NoError(t, err)
 
 		metrics := anvil.Metrics()
@@ -190,6 +195,7 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Test Builder Options", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupTestAnvil(t, func(b *AnvilBuilder) {
 			b.WithBlockTime("2").
 				WithChainID("1337").
@@ -200,81 +206,84 @@ func TestAnvil(t *testing.T) {
 		client := anvil.Client()
 		require.NotNil(t, client)
 
-		_, err := client.BlockNumber(anvil.context)
+		_, err := client.BlockNumber(ctx)
 		require.NoError(t, err)
 	})
 
 	t.Run("Test ResetState", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Get initial block number
-		initialBlock, err := anvil.Client().BlockNumber(anvil.context)
+		initialBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 
 		// Mine blocks
 		for i := 0; i < 3; i++ {
-			err = anvil.MineBlock()
+			err = anvil.MineBlock(ctx)
 			require.NoError(t, err)
 		}
 
 		time.Sleep(time.Second)
 
 		// Verify blocks were mined
-		currentBlock, err := anvil.Client().BlockNumber(anvil.context)
+		currentBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 		assert.Greater(t, currentBlock, initialBlock, "Blocks should have been mined")
 
 		// Reset state
-		err = anvil.ResetState()
+		err = anvil.ResetState(ctx)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second)
 
 		// Verify state was reset
-		newBlock, err := anvil.Client().BlockNumber(anvil.context)
+		newBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, initialBlock, newBlock, "Block number should be reset to initial state")
 	})
 
 	t.Run("Test Snapshot and Revert", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Get initial state
-		initialBlock, err := anvil.Client().BlockNumber(anvil.context)
+		initialBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 
 		// Create snapshot
-		snapshotID, err := anvil.Snapshot()
+		snapshotID, err := anvil.Snapshot(ctx)
 		require.NoError(t, err)
 		assert.NotEmpty(t, snapshotID)
 
 		// Make changes
-		err = anvil.MineBlock()
+		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
-		err = anvil.MineBlock()
+		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second)
 
 		// Verify changes
-		changedBlock, err := anvil.Client().BlockNumber(anvil.context)
+		changedBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 		assert.Greater(t, changedBlock, initialBlock)
 
 		// Revert to snapshot
-		success, err := anvil.Revert(snapshotID)
+		success, err := anvil.Revert(ctx, snapshotID)
 		require.NoError(t, err)
 		assert.True(t, success)
 
 		time.Sleep(time.Second)
 
 		// Verify revert
-		revertedBlock, err := anvil.Client().BlockNumber(anvil.context)
+		revertedBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, initialBlock, revertedBlock)
 	})
 
 	t.Run("Test SetNonce", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		_, addresses, err := anvil.Accounts()
@@ -282,28 +291,29 @@ func TestAnvil(t *testing.T) {
 		testAddr := addresses[0]
 
 		// Set nonce
-		err = anvil.SetNonce(testAddr, 42)
+		err = anvil.SetNonce(ctx, testAddr, 42)
 		require.NoError(t, err)
 
 		// Verify nonce
-		nonce, err := anvil.Client().NonceAt(anvil.context, testAddr, nil)
+		nonce, err := anvil.Client().NonceAt(ctx, testAddr, nil)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(42), nonce)
 	})
 
 	t.Run("Test Mine Multiple Blocks", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
-		initialBlock, err := anvil.Client().BlockNumber(anvil.context)
+		initialBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 
 		// Mine 5 blocks
-		err = anvil.Mine(5, 0)
+		err = anvil.Mine(ctx, 5, 0)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second)
 
-		newBlock, err := anvil.Client().BlockNumber(anvil.context)
+		newBlock, err := anvil.Client().BlockNumber(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, initialBlock+5, newBlock)
 
@@ -312,44 +322,48 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Test Mine With Timestamp", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		futureTimestamp := uint64(time.Now().Unix() + 3600) //nolint:gosec // Unix timestamp is always positive
-		err := anvil.Mine(1, futureTimestamp)
+		err := anvil.Mine(ctx, 1, futureTimestamp)
 		require.NoError(t, err)
 
 		time.Sleep(time.Second)
 
-		block, err := anvil.Client().BlockByNumber(anvil.context, nil)
+		block, err := anvil.Client().BlockByNumber(ctx, nil)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, block.Time(), futureTimestamp)
 	})
 
 	t.Run("Test SetAutomine", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Disable automine
-		err := anvil.SetAutomine(false)
+		err := anvil.SetAutomine(ctx, false)
 		require.NoError(t, err)
 
 		// Re-enable automine
-		err = anvil.SetAutomine(true)
+		err = anvil.SetAutomine(ctx, true)
 		require.NoError(t, err)
 	})
 
 	t.Run("Test SetIntervalMining", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Set interval mining to 1 second
-		err := anvil.SetIntervalMining(1)
+		err := anvil.SetIntervalMining(ctx, 1)
 		require.NoError(t, err)
 
 		// Disable interval mining
-		err = anvil.SetIntervalMining(0)
+		err = anvil.SetIntervalMining(ctx, 0)
 		require.NoError(t, err)
 	})
 
 	t.Run("Test SetCode", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		_, addresses, err := anvil.Accounts()
@@ -358,16 +372,17 @@ func TestAnvil(t *testing.T) {
 
 		// Set some bytecode (simple contract bytecode)
 		bytecode := "0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea264697066735822122012345678901234567890123456789012345678901234567890123456789012345678901264736f6c63430008130033"
-		err = anvil.SetCode(testAddr, bytecode)
+		err = anvil.SetCode(ctx, testAddr, bytecode)
 		require.NoError(t, err)
 
 		// Verify code is set
-		code, err := anvil.Client().CodeAt(anvil.context, testAddr, nil)
+		code, err := anvil.Client().CodeAt(ctx, testAddr, nil)
 		require.NoError(t, err)
 		assert.NotEmpty(t, code)
 	})
 
 	t.Run("Test SetStorageAt", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		_, addresses, err := anvil.Accounts()
@@ -378,7 +393,7 @@ func TestAnvil(t *testing.T) {
 		slot := "0x0000000000000000000000000000000000000000000000000000000000000000"
 		value := "0x0000000000000000000000000000000000000000000000000000000000000001"
 
-		err = anvil.SetStorageAt(testAddr, slot, value)
+		err = anvil.SetStorageAt(ctx, testAddr, slot, value)
 		require.NoError(t, err)
 
 		// Note: Verifying storage requires the address to have code (be a contract)
@@ -386,26 +401,28 @@ func TestAnvil(t *testing.T) {
 	})
 
 	t.Run("Test AutoImpersonate", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Enable auto impersonate
-		err := anvil.AutoImpersonate(true)
+		err := anvil.AutoImpersonate(ctx, true)
 		require.NoError(t, err)
 
 		// Disable auto impersonate
-		err = anvil.AutoImpersonate(false)
+		err = anvil.AutoImpersonate(ctx, false)
 		require.NoError(t, err)
 	})
 
 	t.Run("Test Metrics Tracking", func(t *testing.T) {
+		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
 		// Perform several operations
-		err := anvil.MineBlock()
+		err := anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
 		_, addresses, _ := anvil.Accounts()
-		err = anvil.SetBalance(addresses[0], big.NewInt(1000))
+		err = anvil.SetBalance(ctx, addresses[0], big.NewInt(1000))
 		require.NoError(t, err)
 
 		// Check metrics
@@ -449,5 +466,26 @@ func TestAnvil(t *testing.T) {
 
 		err = anvil.Stop()
 		require.NoError(t, err)
+	})
+
+	// WaitForMemPoolEmpty smoke test — idle mempool should return immediately.
+	t.Run("Test WaitForMemPoolEmpty", func(t *testing.T) {
+		ctx := t.Context()
+		anvil := setupSharedAnvil(t, sharedAnvil)
+
+		err := anvil.WaitForMemPoolEmpty(ctx, 2*time.Second)
+		require.NoError(t, err)
+	})
+
+	// WaitForMemPoolEmpty respects ctx cancellation.
+	t.Run("Test WaitForMemPoolEmpty ctx cancel", func(t *testing.T) {
+		anvil := setupSharedAnvil(t, sharedAnvil)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel() // immediately canceled
+
+		err := anvil.WaitForMemPoolEmpty(ctx, 5*time.Second)
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }

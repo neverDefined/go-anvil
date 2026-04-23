@@ -32,33 +32,37 @@ go get github.com/neverDefined/go-anvil
 package main
 
 import (
+    "context"
     "log"
-    "math/big"
-    
+
     "github.com/neverDefined/go-anvil"
-    "github.com/ethereum/go-ethereum/common"
 )
 
 func main() {
+    ctx := context.Background()
+
     // Create and start an Anvil instance
     anvil, err := anvil.NewAnvil()
     if err != nil {
         log.Fatal(err)
     }
-    
-    err = anvil.Start()
-    if err != nil {
+
+    if err := anvil.Start(); err != nil {
         log.Fatal(err)
     }
     defer anvil.Close()
-    
-    // Get Ethereum clients
-    ethClient := anvil.Client()
-    rpcClient := anvil.RPCClient()
-    
-    // Use the clients for testing
-    blockNumber, _ := ethClient.BlockNumber(context.Background())
+
+    // Query the chain via the Ethereum client
+    blockNumber, err := anvil.Client().BlockNumber(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
     log.Printf("Current block: %d", blockNumber)
+
+    // Drive Anvil's RPC with context-first methods
+    if err := anvil.MineBlock(ctx); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
@@ -93,18 +97,22 @@ anvil, err := anvil.NewAnvilBuilder().
 
 ## Usage Examples
 
+Every mutating RPC method takes a `context.Context` as its first argument. Tests can use `t.Context()`; production callers should use their request context or `context.Background()` with a deadline.
+
 ### Block Mining
 
 ```go
+ctx := context.Background()
+
 // Mine a single block
-err := anvil.MineBlock()
+err := anvil.MineBlock(ctx)
 
 // Mine multiple blocks
-err = anvil.Mine(5, 0)  // Mine 5 blocks with default timestamps
+err = anvil.Mine(ctx, 5, 0)  // Mine 5 blocks with default timestamps
 
 // Mine with specific timestamp
 timestamp := uint64(time.Now().Unix())
-err = anvil.Mine(1, timestamp)
+err = anvil.Mine(ctx, 1, timestamp)
 
 // Wait for a specific block
 err = anvil.WaitForBlock(10, 5*time.Second)
@@ -114,10 +122,10 @@ err = anvil.WaitForBlock(10, 5*time.Second)
 
 ```go
 // Increase time by 1 hour
-err := anvil.IncreaseTime(3600)
+err := anvil.IncreaseTime(ctx, 3600)
 
 // Set timestamp for next block
-err = anvil.SetNextBlockTimestamp(time.Now().Unix())
+err = anvil.SetNextBlockTimestamp(ctx, time.Now().Unix())
 ```
 
 ### Account Management
@@ -128,48 +136,48 @@ keys, addresses, err := anvil.Accounts()
 
 // Set account balance
 address := common.HexToAddress("0x...")
-err = anvil.SetBalance(address, big.NewInt(1e18))  // 1 ETH
+err = anvil.SetBalance(ctx, address, big.NewInt(1e18))  // 1 ETH
 
 // Impersonate an account (send transactions without private key)
-err = anvil.Impersonate(address)
+err = anvil.Impersonate(ctx, address)
 // ... send transactions as this address
-err = anvil.StopImpersonating(address)
+err = anvil.StopImpersonating(ctx, address)
 
 // Set account nonce
-err = anvil.SetNonce(address, 42)
+err = anvil.SetNonce(ctx, address, 42)
 ```
 
 ### State Management
 
 ```go
 // Reset to initial state (fast - uses RPC)
-err := anvil.ResetState()
+err := anvil.ResetState(ctx)
 
 // Create a snapshot
-snapshotID, err := anvil.Snapshot()
+snapshotID, err := anvil.Snapshot(ctx)
 
 // Revert to snapshot
-success, err := anvil.Revert(snapshotID)
+success, err := anvil.Revert(ctx, snapshotID)
 ```
 
 ### Advanced Operations
 
 ```go
 // Set bytecode at address
-err := anvil.SetCode(address, "0x6080604052...")
+err := anvil.SetCode(ctx, address, "0x6080604052...")
 
 // Modify storage slot
-err = anvil.SetStorageAt(address, slot, value)
+err = anvil.SetStorageAt(ctx, address, slot, value)
 
 // Control mining
-err = anvil.SetAutomine(false)  // Disable automatic mining
-err = anvil.SetIntervalMining(5)  // Mine every 5 seconds
+err = anvil.SetAutomine(ctx, false)  // Disable automatic mining
+err = anvil.SetIntervalMining(ctx, 5)  // Mine every 5 seconds
 
 // Enable auto-impersonation
-err = anvil.AutoImpersonate(true)
+err = anvil.AutoImpersonate(ctx, true)
 
 // Drop pending transaction
-err = anvil.DropTransaction(txHash)
+err = anvil.DropTransaction(ctx, txHash)
 ```
 
 ### Metrics
@@ -194,12 +202,12 @@ func TestMyContract(t *testing.T) {
     
     t.Run("test case 1", func(t *testing.T) {
         // Reset state before each test
-        anvil.ResetState()
+        anvil.ResetState(t.Context())
         // ... your test
     })
     
     t.Run("test case 2", func(t *testing.T) {
-        anvil.ResetState()
+        anvil.ResetState(t.Context())
         // ... your test
     })
 }

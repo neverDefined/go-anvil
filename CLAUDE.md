@@ -8,7 +8,7 @@ Guidance for Claude Code when working in this repo. Read this first — it captu
 
 - `anvil.go` — all public API, lifecycle (spawn subprocess + RPC client), builder.
 - `anvil_test.go` — all tests. Integration-only; require `anvil` on `PATH`.
-- `helpers.go` — small utilities (e.g. `MemPoolEmpty`).
+- `helpers.go` — small utilities (e.g. `(*Anvil).WaitForMemPoolEmpty`).
 
 Module path: `github.com/neverDefined/go-anvil`.
 
@@ -27,7 +27,18 @@ If `anvil` isn't on `PATH`, `make check-foundry` tells you.
 
 **Shared-anvil test pattern.** Tests reuse a single `*Anvil` instance via `setupSharedAnvil(t, sharedAnvil)` (see `anvil_test.go`). `ResetState()` between subtests uses snapshot/revert rather than process restart — ~10× faster than spawning a new anvil per test. Only drop to `setupTestAnvil(t, cfg)` when a test truly needs custom config (e.g. forking from a specific URL). Do not introduce new top-level `anvil.NewAnvil()` calls inside test subtests.
 
-**RPC method shape — pending migration.** Mutating RPC methods (`SetBalance`, `Impersonate`, `MineBlock`, `Snapshot`, `SetCode`, `SetStorageAt`, `SetNonce`, `DropTransaction`, `SetAutomine`, etc.) currently call `a.rpcClient.Call(nil, ...)` with a `nil` context. Phase 2 of the roadmap migrates the whole set to context-first signatures in one batch as a breaking pre-1.0 bump. Do not change individual methods in isolation — it'll fragment the API and churn the CHANGELOG twice.
+**RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards to `a.rpcClient.CallContext(ctx, ...)`. Do not regress to bare `Call(nil, ...)` — it removes cancellation and timeout support for callers. When adding a new RPC wrapper, follow this shape:
+
+```go
+func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
+    a.rpcCalls.Add(1)
+    if err := a.rpcClient.CallContext(ctx, nil, "anvil_setFoo", arg); err != nil {
+        a.logger.Error().Err(err).Str("arg", fmt.Sprint(arg)).Msg("Failed to set foo")
+        return err
+    }
+    return nil
+}
+```
 
 **Builder pattern.** All `With*` methods are setters that return `*AnvilBuilder` for chaining; they don't validate. Validation lives in `Build()` (`validate()` is called at the top). When adding a new option, follow this split.
 
