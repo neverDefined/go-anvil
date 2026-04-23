@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -487,5 +488,72 @@ func TestAnvil(t *testing.T) {
 		err := anvil.WaitForMemPoolEmpty(ctx, 5*time.Second)
 		require.Error(t, err)
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	// Startup timeout too short should return ErrStartupTimeout on Start.
+	t.Run("Test StartupTimeout exceeded", func(t *testing.T) {
+		builder := NewAnvilBuilder().
+			WithLogLevel(zerolog.Disabled).
+			WithPort(getTestPort()).
+			WithStartupTimeout(1 * time.Millisecond)
+
+		anvil, err := builder.Build()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = anvil.Close() })
+
+		err = anvil.Start()
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrStartupTimeout)
+	})
+
+	// RPC calls with an already-canceled context return context.Canceled.
+	t.Run("Test RPC ctx canceled", func(t *testing.T) {
+		anvil := setupSharedAnvil(t, sharedAnvil)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		err := anvil.MineBlock(ctx)
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	// Concurrent RPC calls: 50 goroutines each doing mixed MineBlock / SetBalance / Metrics
+	// reads for ~500ms. Verifies atomics hold under contention and no races surface under -race.
+	t.Run("Test Concurrent RPC calls", func(t *testing.T) {
+		ctx := t.Context()
+		anvil := setupSharedAnvil(t, sharedAnvil)
+
+		_, addresses, err := anvil.Accounts()
+		require.NoError(t, err)
+		addr := addresses[0]
+
+		before := anvil.Metrics()
+
+		deadline := time.Now().Add(500 * time.Millisecond)
+		var wg sync.WaitGroup
+		const workers = 50
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func(i int) {
+				defer wg.Done()
+				for time.Now().Before(deadline) {
+					switch i % 3 {
+					case 0:
+						_ = anvil.MineBlock(ctx)
+					case 1:
+						_ = anvil.SetBalance(ctx, addr, big.NewInt(int64(i+1)))
+					case 2:
+						_ = anvil.Metrics()
+					}
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		after := anvil.Metrics()
+		// Metrics must have advanced — exact counts depend on RPC latency so just assert monotonic growth.
+		assert.Greater(t, after.RPCCalls, before.RPCCalls, "RPCCalls should have grown under concurrent load")
+		assert.GreaterOrEqual(t, after.BlocksMined, before.BlocksMined, "BlocksMined should not regress")
 	})
 }

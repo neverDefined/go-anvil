@@ -90,6 +90,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Free function `MemPoolEmpty(ctx, client)` — use `(*Anvil).WaitForMemPoolEmpty` instead.
   Will be removed in a future release.
 
+### Tests
+- Added `anvil_unit_test.go`: pure-Go unit tests (no live anvil / no Foundry required) covering
+  builder validation, `resolveAnvilPath` with temp-dir fixtures, the `retry` helper,
+  `errors.Is` wrapping for every sentinel, and RPC method shape via `httptest`-backed JSON-RPC
+  server. Contributors without Foundry can run `go test -run '^Test(AnvilBuilder|ResolveAnvilPath|Retry|SentinelErrors|RPC)' ./...`.
+- Added integration subtests for the startup-timeout path (`ErrStartupTimeout`), ctx-cancelled
+  RPC call, and 50-goroutine concurrent-stress test that exercises atomics and `-race`.
+- Added `fork_test.go` behind a `//go:build fork` tag; reads `ETH_RPC_URL` and skips cleanly
+  when unset. Exercises `WithFork` and `WithForkBlockNumber`.
+- Added `anvil_bench_test.go` with `BenchmarkMineBlock`, `BenchmarkSetBalance`,
+  `BenchmarkSnapshotRevertCycle`, and `BenchmarkResetState` for tracking RPC-latency regressions.
+
 ### Fixed
 - Duplicate test function "Test Reset Functionality" removed
 - Resource cleanup now thread-safe with `sync.Once`
