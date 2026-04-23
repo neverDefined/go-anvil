@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go doc *)",
+      "Bash(go version *)",
+      "Bash(go env *)",
+      "Bash(go mod tidy)",
+      "Bash(go mod download)",
+      "Bash(go mod verify)",
+      "Bash(go mod why *)",
+      "Bash(golangci-lint run *)",
+      "Bash(golangci-lint version)",
+      "Bash(govulncheck *)",
+      "Bash(make test)",
+      "Bash(make lint)",
+      "Bash(make vet)",
+      "Bash(make fmt)",
+      "Bash(make check)",
+      "Bash(make bench)",
+      "Bash(make doc)",
+      "Bash(make check-foundry)",
+      "Bash(anvil --version)",
+      "Bash(anvil --help)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch)",
+      "Bash(git branch --show-current)",
+      "Bash(git fetch *)",
+      "Bash(git pull --ff-only *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh label list *)",
+      "Bash(gh repo view *)"
+    ]
+  }
+}
