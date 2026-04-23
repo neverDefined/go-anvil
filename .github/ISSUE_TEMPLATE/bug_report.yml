@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a defect in go-anvil.
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in the fields below so the issue is actionable.
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`.
+      placeholder: "go version go1.25.0 darwin/arm64"
+    validations:
+      required: true
+
+  - type: input
+    id: anvil-version
+    attributes:
+      label: Foundry / anvil version
+      description: Output of `anvil --version`.
+      placeholder: "anvil Version: 1.5.0-stable"
+    validations:
+      required: true
+
+  - type: input
+    id: go-anvil-version
+    attributes:
+      label: go-anvil version / commit
+      description: Module version pinned in go.mod, or commit SHA.
+      placeholder: "v0.1.0 or 5ae0d5c"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other (specify in reproduction)
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Runnable Go snippet or repo link that reproduces the issue.
+      render: go
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include error messages and stack traces verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional logs or anvil output
+      description: Paste any relevant anvil stderr or verbose log output.
+      render: shell
+    validations:
+      required: false

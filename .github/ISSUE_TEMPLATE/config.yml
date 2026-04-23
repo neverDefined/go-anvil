@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Foundry (upstream anvil) documentation
+    url: https://book.getfoundry.sh/anvil/
+    about: Questions about anvil itself (flags, RPC methods, behaviour) belong upstream, not here.
+  - name: Security vulnerability
+    url: https://github.com/neverDefined/go-anvil/security/advisories/new
+    about: Please report vulnerabilities privately via GitHub security advisories.
