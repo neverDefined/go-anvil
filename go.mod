@@ -3,7 +3,7 @@ module github.com/neverDefined/go-anvil
 go 1.25.7
 
 require (
-	github.com/ethereum/go-ethereum v1.17.2
+	github.com/ethereum/go-ethereum v1.17.3
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
 )
