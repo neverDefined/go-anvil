@@ -3,7 +3,7 @@ module github.com/neverDefined/go-anvil
 go 1.25.7
 
 require (
-	github.com/ethereum/go-ethereum v1.17.3
+	github.com/ethereum/go-ethereum v1.17.4
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
 )
@@ -19,6 +19,7 @@ require (
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.7 // indirect
+	github.com/fjl/jsonw v0.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
