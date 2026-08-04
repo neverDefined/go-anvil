@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `GetProof(ctx, address, storageKeys, blockNumber)` — EIP-1186 `eth_getProof` wrapper returning `*AccountResult`, for light-client style tests (#84).
+- `VerifyProof(stateRoot, proof)` — verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
 
 ## [0.1.0] - 2026-04-23
 

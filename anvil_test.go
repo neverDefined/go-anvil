@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -435,6 +436,15 @@ func TestAnvil(t *testing.T) {
 
 		require.Len(t, proof.StorageProof, 1)
 		assert.Equal(t, int64(42), proof.StorageProof[0].Value.ToInt().Int64())
+
+		// The proof must verify against the header's state root — this is the
+		// light-client property the API exists for.
+		require.NoError(t, VerifyProof(header.Root, proof))
+
+		// A tampered claim must fail verification.
+		tampered := *proof
+		tampered.Balance = (*hexutil.Big)(new(big.Int).Add(proof.Balance.ToInt(), big.NewInt(1)))
+		require.Error(t, VerifyProof(header.Root, &tampered))
 	})
 
 	t.Run("Test AutoImpersonate", func(t *testing.T) {

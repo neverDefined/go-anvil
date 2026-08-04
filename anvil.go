@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/rs/zerolog"
@@ -482,7 +482,8 @@ type StorageResult struct {
 // GetProof returns the EIP-1186 account and storage proofs for the given address.
 // The storageKeys are hex-encoded storage slot keys; pass nil for an account-only proof.
 // A nil blockNumber means the latest block; pin a specific block when the proof must
-// be checked against that block's state root.
+// be checked against that block's state root. Use VerifyProof to check the result
+// against a header's state root.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNumber *big.Int) (*AccountResult, error) {
 	a.rpcCalls.Add(1)
