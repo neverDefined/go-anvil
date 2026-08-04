@@ -314,23 +314,32 @@ func newTestAnvil(t *testing.T, server *httptest.Server) *Anvil {
 
 func TestRPCMethods_sendCorrectMethod(t *testing.T) {
 	rs := newRPCServer(t, map[string]any{
-		"evm_mine":                    nil,
-		"evm_setNextBlockTimestamp":   nil,
-		"evm_increaseTime":            nil,
-		"anvil_setBalance":            nil,
-		"anvil_impersonateAccount":    nil,
+		"evm_mine":                       nil,
+		"evm_setNextBlockTimestamp":      nil,
+		"evm_increaseTime":               nil,
+		"anvil_setBalance":               nil,
+		"anvil_impersonateAccount":       nil,
 		"anvil_stopImpersonatingAccount": nil,
-		"evm_snapshot":                "0xabc",
-		"evm_revert":                  true,
-		"anvil_setCode":               nil,
-		"anvil_setStorageAt":          nil,
-		"anvil_setNonce":              nil,
-		"anvil_mine":                  nil,
-		"anvil_dropTransaction":       nil,
-		"evm_setAutomine":             nil,
-		"evm_setIntervalMining":       nil,
-		"anvil_autoImpersonateAccount": nil,
-		"anvil_reset":                 nil,
+		"evm_snapshot":                   "0xabc",
+		"evm_revert":                     true,
+		"anvil_setCode":                  nil,
+		"anvil_setStorageAt":             nil,
+		"anvil_setNonce":                 nil,
+		"anvil_mine":                     nil,
+		"anvil_dropTransaction":          nil,
+		"evm_setAutomine":                nil,
+		"evm_setIntervalMining":          nil,
+		"anvil_autoImpersonateAccount":   nil,
+		"anvil_reset":                    nil,
+		"eth_getProof": map[string]any{
+			"address":      "0x1234567890123456789012345678901234567890",
+			"accountProof": []string{},
+			"balance":      "0x0",
+			"codeHash":     "0x0000000000000000000000000000000000000000000000000000000000000000",
+			"nonce":        "0x0",
+			"storageHash":  "0x0000000000000000000000000000000000000000000000000000000000000000",
+			"storageProof": []any{},
+		},
 	})
 	a := newTestAnvil(t, rs.server)
 	ctx := context.Background()
@@ -405,6 +414,13 @@ func TestRPCMethods_sendCorrectMethod(t *testing.T) {
 	t.Run("ResetFork", func(t *testing.T) {
 		require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
 		assert.Equal(t, "anvil_reset", rs.lastCall().Method)
+	})
+	t.Run("GetProof", func(t *testing.T) {
+		result, err := a.GetProof(ctx, addr, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "eth_getProof", rs.lastCall().Method)
+		assert.Equal(t, addr, result.Address)
 	})
 }
 

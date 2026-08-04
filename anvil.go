@@ -19,6 +19,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/rs/zerolog"
@@ -457,6 +458,51 @@ func (a *Anvil) SetNonce(ctx context.Context, address common.Address, nonce uint
 		a.logger.Error().Err(err).Str("address", address.Hex()).Uint64("nonce", nonce).Msg("Failed to set nonce")
 	}
 	return err
+}
+
+// AccountResult is an EIP-1186 account proof with its storage proofs, as
+// returned by eth_getProof.
+type AccountResult struct {
+	Address      common.Address  `json:"address"`
+	AccountProof []string        `json:"accountProof"`
+	Balance      *hexutil.Big    `json:"balance"`
+	CodeHash     common.Hash     `json:"codeHash"`
+	Nonce        hexutil.Uint64  `json:"nonce"`
+	StorageHash  common.Hash     `json:"storageHash"`
+	StorageProof []StorageResult `json:"storageProof"`
+}
+
+// StorageResult is an EIP-1186 proof for a single storage slot.
+type StorageResult struct {
+	Key   string       `json:"key"`
+	Value *hexutil.Big `json:"value"`
+	Proof []string     `json:"proof"`
+}
+
+// GetProof returns the EIP-1186 account and storage proofs for the given address.
+// The storageKeys are hex-encoded storage slot keys; pass nil for an account-only proof.
+// A nil blockNumber means the latest block; pin a specific block when the proof must
+// be checked against that block's state root.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNumber *big.Int) (*AccountResult, error) {
+	a.rpcCalls.Add(1)
+	if storageKeys == nil {
+		storageKeys = []string{}
+	}
+	var result AccountResult
+	if err := a.rpcClient.CallContext(ctx, &result, "eth_getProof", address, storageKeys, toBlockNumArg(blockNumber)); err != nil {
+		a.logger.Error().Err(err).Str("address", address.Hex()).Msg("Failed to get proof")
+		return nil, err
+	}
+	return &result, nil
+}
+
+// toBlockNumArg encodes a block number for JSON-RPC; nil means "latest".
+func toBlockNumArg(number *big.Int) string {
+	if number == nil {
+		return "latest"
+	}
+	return hexutil.EncodeBig(number)
 }
 
 // Mine mines multiple blocks at once.
