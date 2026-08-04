@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -75,11 +76,26 @@ func verifyStorageProof(storageRoot common.Hash, sp StorageResult) error {
 	if err != nil {
 		return err
 	}
+	if sp.Value == nil {
+		return fmt.Errorf("missing value")
+	}
+	isZero := sp.Value.ToInt().Sign() == 0
+
+	// An empty storage trie proves every slot absent. geth's trie.VerifyProof
+	// can't replay this case: the root node is RLP 0x80 (the empty string),
+	// which its node decoder rejects as a non-list.
+	if storageRoot == types.EmptyRootHash {
+		if !isZero {
+			return fmt.Errorf("claimed nonzero value %s against empty storage trie", sp.Value)
+		}
+		return nil
+	}
+
 	leaf, err := verifyTrieProof(storageRoot, crypto.Keccak256(key), sp.Proof)
 	if err != nil {
 		return err
 	}
-	if sp.Value == nil || sp.Value.ToInt().Sign() == 0 {
+	if isZero {
 		if len(leaf) != 0 {
 			return fmt.Errorf("claimed zero value but trie holds %s", hexutil.Encode(leaf))
 		}

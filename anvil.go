@@ -499,11 +499,16 @@ func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKey
 }
 
 // toBlockNumArg encodes a block number for JSON-RPC; nil means "latest".
+// Negative values map through rpc.BlockNumber, matching ethclient's handling
+// of the "pending"/"finalized"/"safe" sentinels.
 func toBlockNumArg(number *big.Int) string {
 	if number == nil {
 		return "latest"
 	}
-	return hexutil.EncodeBig(number)
+	if number.Sign() >= 0 {
+		return hexutil.EncodeBig(number)
+	}
+	return rpc.BlockNumber(number.Int64()).String()
 }
 
 // Mine mines multiple blocks at once.

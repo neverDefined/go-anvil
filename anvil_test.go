@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -445,6 +446,13 @@ func TestAnvil(t *testing.T) {
 		tampered := *proof
 		tampered.Balance = (*hexutil.Big)(new(big.Int).Add(proof.Balance.ToInt(), big.NewInt(1)))
 		require.Error(t, VerifyProof(header.Root, &tampered))
+
+		// Regression: a zero-valued slot on an account with an empty storage
+		// trie (any EOA) must verify as an absence proof.
+		emptyProof, err := anvil.GetProof(ctx, addresses[1], []string{slot}, header.Number)
+		require.NoError(t, err)
+		assert.Equal(t, types.EmptyRootHash, emptyProof.StorageHash)
+		require.NoError(t, VerifyProof(header.Root, emptyProof))
 	})
 
 	t.Run("Test AutoImpersonate", func(t *testing.T) {
