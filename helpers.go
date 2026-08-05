@@ -25,6 +25,12 @@ import (
 // proven storage hash. The account must exist in the state trie; account
 // exclusion proofs are not supported. Storage slots with a zero value are
 // verified as absence proofs against the storage trie.
+//
+// VerifyProof checks consistency, not completeness: only the storage entries
+// present in proof.StorageProof are verified, so a response omitting a
+// requested slot goes unnoticed. Callers proving a specific slot must confirm
+// a StorageProof entry for it exists, comparing keys in normalized form —
+// "0x1" and "0x01" name the same slot.
 // Returns nil if the proof is valid.
 func VerifyProof(stateRoot common.Hash, proof *AccountResult) error {
 	if proof == nil {
