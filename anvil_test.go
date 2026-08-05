@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -399,6 +401,58 @@ func TestAnvil(t *testing.T) {
 
 		// Note: Verifying storage requires the address to have code (be a contract)
 		// This test just ensures the RPC call doesn't error
+	})
+
+	t.Run("Test GetProof", func(t *testing.T) {
+		ctx := t.Context()
+		anvil := setupSharedAnvil(t, sharedAnvil)
+
+		_, addresses, err := anvil.Accounts()
+		require.NoError(t, err)
+		testAddr := addresses[0]
+
+		slot := "0x0000000000000000000000000000000000000000000000000000000000000001"
+		value := "0x000000000000000000000000000000000000000000000000000000000000002a"
+		err = anvil.SetStorageAt(ctx, testAddr, slot, value)
+		require.NoError(t, err)
+
+		// Mine so the state root in the head block reflects the storage write.
+		err = anvil.MineBlock(ctx)
+		require.NoError(t, err)
+
+		// Pin the block so proof and header describe the same state.
+		header, err := anvil.Client().HeaderByNumber(ctx, nil)
+		require.NoError(t, err)
+
+		proof, err := anvil.GetProof(ctx, testAddr, []string{slot}, header.Number)
+		require.NoError(t, err)
+		require.NotNil(t, proof)
+
+		assert.Equal(t, testAddr, proof.Address)
+		assert.NotEmpty(t, proof.AccountProof)
+
+		balance, err := anvil.Client().BalanceAt(ctx, testAddr, header.Number)
+		require.NoError(t, err)
+		assert.Zero(t, balance.Cmp(proof.Balance.ToInt()))
+
+		require.Len(t, proof.StorageProof, 1)
+		assert.Equal(t, int64(42), proof.StorageProof[0].Value.ToInt().Int64())
+
+		// The proof must verify against the header's state root — this is the
+		// light-client property the API exists for.
+		require.NoError(t, VerifyProof(header.Root, proof))
+
+		// A tampered claim must fail verification.
+		tampered := *proof
+		tampered.Balance = (*hexutil.Big)(new(big.Int).Add(proof.Balance.ToInt(), big.NewInt(1)))
+		require.Error(t, VerifyProof(header.Root, &tampered))
+
+		// Regression: a zero-valued slot on an account with an empty storage
+		// trie (any EOA) must verify as an absence proof.
+		emptyProof, err := anvil.GetProof(ctx, addresses[1], []string{slot}, header.Number)
+		require.NoError(t, err)
+		assert.Equal(t, types.EmptyRootHash, emptyProof.StorageHash)
+		require.NoError(t, VerifyProof(header.Root, emptyProof))
 	})
 
 	t.Run("Test AutoImpersonate", func(t *testing.T) {
