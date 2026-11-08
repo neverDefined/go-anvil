@@ -109,11 +109,12 @@ ctx := context.Background()
 err := anvil.MineBlock(ctx)
 
 // Mine multiple blocks
-err = anvil.Mine(ctx, 5, 0)  // Mine 5 blocks with default timestamps
+err = anvil.Mine(ctx, 5, 0)   // 5 blocks, default timestamps
+err = anvil.Mine(ctx, 5, 12)  // 5 blocks, 12 seconds apart
 
-// Mine with specific timestamp
-timestamp := uint64(time.Now().Unix())
-err = anvil.Mine(ctx, 1, timestamp)
+// Mine one block at a specific timestamp
+err = anvil.SetNextBlockTimestamp(ctx, time.Now().Add(time.Hour).Unix())
+err = anvil.MineBlock(ctx)
 
 // Wait for a specific block
 err = anvil.WaitForBlock(10, 5*time.Second)

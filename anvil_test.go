@@ -324,19 +324,28 @@ func TestAnvil(t *testing.T) {
 		assert.GreaterOrEqual(t, metrics.BlocksMined, uint64(5))
 	})
 
-	t.Run("Test Mine With Timestamp", func(t *testing.T) {
+	// The second Mine argument spaces blocks apart; it is not a timestamp.
+	t.Run("Test Mine With Interval", func(t *testing.T) {
 		ctx := t.Context()
 		anvil := setupSharedAnvil(t, sharedAnvil)
 
-		futureTimestamp := uint64(time.Now().Unix() + 3600) //nolint:gosec // Unix timestamp is always positive
-		err := anvil.Mine(ctx, 1, futureTimestamp)
+		head, err := anvil.Client().HeaderByNumber(ctx, nil)
 		require.NoError(t, err)
 
-		time.Sleep(time.Second)
+		const interval = 100
+		require.NoError(t, anvil.Mine(ctx, 3, interval))
 
-		block, err := anvil.Client().BlockByNumber(ctx, nil)
-		require.NoError(t, err)
-		assert.GreaterOrEqual(t, block.Time(), futureTimestamp)
+		var times []uint64
+		for i := uint64(1); i <= 3; i++ {
+			h, err := anvil.Client().HeaderByNumber(ctx, new(big.Int).SetUint64(head.Number.Uint64()+i))
+			require.NoError(t, err)
+			times = append(times, h.Time)
+		}
+		// The first block is timed from the node's clock, the rest from each other.
+		assert.GreaterOrEqual(t, times[0], head.Time+interval)
+		assert.Less(t, times[0], head.Time+interval+60, "a timestamp, not an interval, would be decades ahead")
+		assert.Equal(t, times[0]+interval, times[1])
+		assert.Equal(t, times[1]+interval, times[2])
 	})
 
 	t.Run("Test SetAutomine", func(t *testing.T) {
@@ -610,4 +619,85 @@ func TestAnvil(t *testing.T) {
 		assert.Greater(t, after.RPCCalls, before.RPCCalls, "RPCCalls should have grown under concurrent load")
 		assert.GreaterOrEqual(t, after.BlocksMined, before.BlocksMined, "BlocksMined should not regress")
 	})
+}
+
+// TestResetStateBaseline uses its own instances: each case depends on the exact
+// state right after Start.
+func TestResetStateBaseline(t *testing.T) {
+	t.Run("first call returns to the state after Start", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		a := startQuiet(t, NewAnvilBuilder())
+
+		require.NoError(t, a.Mine(ctx, 5, 0))
+		require.NoError(t, a.ResetState(ctx))
+
+		block, err := a.Client().BlockNumber(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), block)
+	})
+
+	// Regression for #79: concurrent resets used to consume the same snapshot.
+	t.Run("concurrent calls all succeed", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		a := startQuiet(t, NewAnvilBuilder())
+		require.NoError(t, a.Mine(ctx, 3, 0))
+
+		errs := make([]error, 8)
+		var wg sync.WaitGroup
+		for i := range errs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = a.ResetState(ctx)
+			}()
+		}
+		wg.Wait()
+		for i, err := range errs {
+			require.NoError(t, err, "call %d", i)
+		}
+
+		block, err := a.Client().BlockNumber(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), block)
+	})
+
+	t.Run("a baseline consumed by a direct Revert is reported", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		a := startQuiet(t, NewAnvilBuilder())
+
+		ok, err := a.Revert(ctx, a.baseline)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		require.ErrorContains(t, a.ResetState(ctx), "no longer exists")
+	})
+}
+
+func TestWaitForMemPoolEmptyCountsQueued(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startQuiet(t, NewAnvilBuilder())
+	require.NoError(t, a.SetAutomine(ctx, false))
+
+	_, addrs, err := a.Accounts()
+	require.NoError(t, err)
+
+	// A nonce ahead of the account's next nonce leaves the transaction queued,
+	// not pending, so a pending-only count would report an empty pool.
+	var hash common.Hash
+	require.NoError(t, a.RPCClient().CallContext(ctx, &hash, "eth_sendTransaction", map[string]any{
+		"from":  addrs[0],
+		"to":    addrs[1],
+		"value": "0x1",
+		"nonce": "0x5",
+	}))
+
+	err = a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	require.NoError(t, a.DropTransaction(ctx, hash.Hex()))
+	require.NoError(t, a.WaitForMemPoolEmpty(ctx, time.Second))
 }

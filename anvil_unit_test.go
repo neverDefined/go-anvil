@@ -432,7 +432,11 @@ func TestRPCMethods_sendCorrectMethod(t *testing.T) {
 	})
 	t.Run("ResetFork", func(t *testing.T) {
 		require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
-		assert.Equal(t, "anvil_reset", rs.lastCall().Method)
+		require.GreaterOrEqual(t, len(rs.calls), 2)
+		assert.Equal(t, "anvil_reset", rs.calls[len(rs.calls)-2].Method)
+		// anvil drops all snapshots on reset, so ResetFork takes a new baseline.
+		assert.Equal(t, "evm_snapshot", rs.lastCall().Method)
+		assert.Equal(t, "0xabc", a.baseline)
 	})
 	t.Run("GetProof", func(t *testing.T) {
 		result, err := a.GetProof(ctx, addr, nil, nil)
