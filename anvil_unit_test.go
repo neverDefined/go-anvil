@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +75,32 @@ func TestAnvilBuilder_validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnvilBuilder_args(t *testing.T) {
+	a, err := NewAnvilBuilder().Build()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--port", "0"}, a.args, "anvil picks the port by default")
+
+	a, err = NewAnvilBuilder().
+		WithBlockTime("2").
+		WithChainID("1337").
+		WithGasLimit("12000000").
+		WithGasPrice("20000000000").
+		WithFork("https://example.org").
+		WithForkBlockNumber("5").
+		WithPort("9000").
+		Build()
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"--block-time", "2",
+		"--chain-id", "1337",
+		"--gas-limit", "12000000",
+		"--gas-price", "20000000000",
+		"--fork-url", "https://example.org",
+		"--fork-block-number", "5",
+		"--port", "9000",
+	}, a.args)
 }
 
 func TestAnvilBuilder_WithStartupTimeout(t *testing.T) {
@@ -183,32 +211,12 @@ func TestResolveAnvilPath(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Error sentinels — errors.Is propagation
-// -----------------------------------------------------------------------------
-
-func TestSentinelErrorsAreWrappable(t *testing.T) {
-	sentinels := []error{
-		ErrNotStarted,
-		ErrAlreadyStarted,
-		ErrConnectionFailed,
-		ErrInvalidConfig,
-		ErrAnvilNotFound,
-		ErrAnvilNotExecutable,
-		ErrStartupTimeout,
-	}
-	for _, s := range sentinels {
-		wrapped := fmt.Errorf("wrapped: %w", s)
-		assert.True(t, errors.Is(wrapped, s), "errors.Is failed for %v", s)
-	}
-}
-
-// -----------------------------------------------------------------------------
 // RPC method shape — httptest-backed
 // -----------------------------------------------------------------------------
 
 // rpcServer is a test JSON-RPC server that records calls and responds with canned results.
 type rpcServer struct {
-	t      *testing.T
+	mu     sync.Mutex
 	calls  []rpcCall
 	server *httptest.Server
 }
@@ -218,8 +226,11 @@ type rpcCall struct {
 	Params []json.RawMessage
 }
 
-// paramsJSON returns the call's params as one JSON array.
+// paramsJSON returns the call's params as one JSON array; no params is "[]".
 func (c rpcCall) paramsJSON() string {
+	if len(c.Params) == 0 {
+		return "[]"
+	}
 	b, _ := json.Marshal(c.Params)
 	return string(b)
 }
@@ -233,7 +244,7 @@ type rpcReq struct {
 
 func newRPCServer(t *testing.T, results map[string]any) *rpcServer {
 	t.Helper()
-	rs := &rpcServer{t: t}
+	rs := &rpcServer{}
 	rs.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -245,7 +256,9 @@ func newRPCServer(t *testing.T, results map[string]any) *rpcServer {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		rs.mu.Lock()
 		rs.calls = append(rs.calls, rpcCall{Method: req.Method, Params: req.Params})
+		rs.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
 		id := string(req.ID)
@@ -268,10 +281,10 @@ func newRPCServer(t *testing.T, results map[string]any) *rpcServer {
 	return rs
 }
 
-func (rs *rpcServer) lastCall() rpcCall {
-	rs.t.Helper()
-	require.NotEmpty(rs.t, rs.calls, "expected at least one RPC call")
-	return rs.calls[len(rs.calls)-1]
+func (rs *rpcServer) recorded() []rpcCall {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return slices.Clone(rs.calls)
 }
 
 // newTestAnvil constructs an *Anvil wired up to a test RPC server — no subprocess, no ethclient.
@@ -293,139 +306,149 @@ func newTestAnvil(t *testing.T, server *httptest.Server) *Anvil {
 	}
 }
 
-func TestRPCMethods_sendCorrectMethod(t *testing.T) {
-	rs := newRPCServer(t, map[string]any{
-		"evm_mine":                       nil,
-		"evm_setNextBlockTimestamp":      nil,
-		"evm_increaseTime":               nil,
-		"anvil_setBalance":               nil,
-		"anvil_impersonateAccount":       nil,
-		"anvil_stopImpersonatingAccount": nil,
-		"evm_snapshot":                   "0xabc",
-		"evm_revert":                     true,
-		"anvil_setCode":                  nil,
-		"anvil_setStorageAt":             nil,
-		"anvil_setNonce":                 nil,
-		"anvil_mine":                     nil,
-		"anvil_dropTransaction":          nil,
-		"evm_setAutomine":                nil,
-		"evm_setIntervalMining":          nil,
-		"anvil_autoImpersonateAccount":   nil,
-		"anvil_reset":                    nil,
-		"eth_getProof": map[string]any{
-			"address":      "0x1234567890123456789012345678901234567890",
-			"accountProof": []string{},
-			"balance":      "0x0",
-			"codeHash":     "0x0000000000000000000000000000000000000000000000000000000000000000",
-			"nonce":        "0x0",
-			"storageHash":  "0x0000000000000000000000000000000000000000000000000000000000000000",
-			"storageProof": []any{},
-		},
-	})
-	a := newTestAnvil(t, rs.server)
-	ctx := context.Background()
+// cannedResults answers every wrapped method.
+var cannedResults = map[string]any{
+	"evm_mine":                       nil,
+	"evm_setNextBlockTimestamp":      nil,
+	"evm_increaseTime":               nil,
+	"anvil_setBalance":               nil,
+	"anvil_impersonateAccount":       nil,
+	"anvil_stopImpersonatingAccount": nil,
+	"evm_snapshot":                   "0xabc",
+	"evm_revert":                     true,
+	"anvil_setCode":                  nil,
+	"anvil_setStorageAt":             nil,
+	"anvil_setNonce":                 nil,
+	"anvil_mine":                     nil,
+	"anvil_dropTransaction":          nil,
+	"evm_setAutomine":                nil,
+	"evm_setIntervalMining":          nil,
+	"anvil_autoImpersonateAccount":   nil,
+	"anvil_reset":                    nil,
+	"txpool_status":                  map[string]any{"pending": "0x0", "queued": "0x0"},
+	"eth_getProof": map[string]any{
+		"address":      "0x1234567890123456789012345678901234567890",
+		"accountProof": []string{},
+		"balance":      "0x0",
+		"codeHash":     "0x0000000000000000000000000000000000000000000000000000000000000000",
+		"nonce":        "0x0",
+		"storageHash":  "0x0000000000000000000000000000000000000000000000000000000000000000",
+		"storageProof": []any{},
+	},
+}
+
+// TestRPCWrappers pins the JSON-RPC method and params each wrapper sends.
+func TestRPCWrappers(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	const a = `"0x1234567890123456789012345678901234567890"`
 
-	t.Run("MineBlock", func(t *testing.T) {
-		require.NoError(t, a.MineBlock(ctx))
-		assert.Equal(t, "evm_mine", rs.lastCall().Method)
-	})
-	t.Run("SetNextBlockTimestamp", func(t *testing.T) {
-		require.NoError(t, a.SetNextBlockTimestamp(ctx, 12345))
-		assert.Equal(t, "evm_setNextBlockTimestamp", rs.lastCall().Method)
-	})
-	t.Run("IncreaseTime", func(t *testing.T) {
-		require.NoError(t, a.IncreaseTime(ctx, 3600))
-		assert.Equal(t, "evm_increaseTime", rs.lastCall().Method)
-	})
-	t.Run("SetBalance", func(t *testing.T) {
-		require.NoError(t, a.SetBalance(ctx, addr, big.NewInt(100)))
-		assert.Equal(t, "anvil_setBalance", rs.lastCall().Method)
-	})
-	t.Run("Impersonate", func(t *testing.T) {
-		require.NoError(t, a.Impersonate(ctx, addr))
-		assert.Equal(t, "anvil_impersonateAccount", rs.lastCall().Method)
-	})
-	t.Run("StopImpersonating", func(t *testing.T) {
-		require.NoError(t, a.StopImpersonating(ctx, addr))
-		assert.Equal(t, "anvil_stopImpersonatingAccount", rs.lastCall().Method)
-	})
-	t.Run("Snapshot returns result", func(t *testing.T) {
-		id, err := a.Snapshot(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, "0xabc", id)
-	})
-	t.Run("Revert returns bool", func(t *testing.T) {
-		ok, err := a.Revert(ctx, "0xabc")
-		require.NoError(t, err)
-		assert.True(t, ok)
-	})
-	t.Run("SetCode", func(t *testing.T) {
-		require.NoError(t, a.SetCode(ctx, addr, "0x00"))
-		assert.Equal(t, "anvil_setCode", rs.lastCall().Method)
-	})
-	t.Run("SetStorageAt", func(t *testing.T) {
-		require.NoError(t, a.SetStorageAt(ctx, addr, "0x0", "0x1"))
-		assert.Equal(t, "anvil_setStorageAt", rs.lastCall().Method)
-	})
-	t.Run("SetNonce", func(t *testing.T) {
-		require.NoError(t, a.SetNonce(ctx, addr, 42))
-		assert.Equal(t, "anvil_setNonce", rs.lastCall().Method)
-		assert.JSONEq(t, `["0x1234567890123456789012345678901234567890","0x2a"]`, rs.lastCall().paramsJSON())
-	})
-	t.Run("Mine", func(t *testing.T) {
-		require.NoError(t, a.Mine(ctx, 5, 0))
-		assert.Equal(t, "anvil_mine", rs.lastCall().Method)
-		assert.JSONEq(t, `["0x5"]`, rs.lastCall().paramsJSON())
+	cases := []struct {
+		name string
+		run  func(context.Context, *Anvil) error
+		want []rpcCall // Params holds one JSON array, compared with JSONEq
+	}{
+		{"MineBlock", func(ctx context.Context, x *Anvil) error { return x.MineBlock(ctx) },
+			calls("evm_mine", `[]`)},
+		{"Mine", func(ctx context.Context, x *Anvil) error { return x.Mine(ctx, 5, 0) },
+			calls("anvil_mine", `["0x5"]`)},
+		{"Mine with interval", func(ctx context.Context, x *Anvil) error { return x.Mine(ctx, 5, 12) },
+			calls("anvil_mine", `["0x5","0xc"]`)},
+		{"SetNextBlockTimestamp", func(ctx context.Context, x *Anvil) error { return x.SetNextBlockTimestamp(ctx, 12345) },
+			calls("evm_setNextBlockTimestamp", `[12345]`)},
+		{"IncreaseTime", func(ctx context.Context, x *Anvil) error { return x.IncreaseTime(ctx, 3600) },
+			calls("evm_increaseTime", `[3600]`)},
+		{"SetBalance", func(ctx context.Context, x *Anvil) error { return x.SetBalance(ctx, addr, big.NewInt(100)) },
+			calls("anvil_setBalance", `[`+a+`,"100"]`)},
+		{"SetNonce", func(ctx context.Context, x *Anvil) error { return x.SetNonce(ctx, addr, 42) },
+			calls("anvil_setNonce", `[`+a+`,"0x2a"]`)},
+		{"SetCode", func(ctx context.Context, x *Anvil) error { return x.SetCode(ctx, addr, "0x00") },
+			calls("anvil_setCode", `[`+a+`,"0x00"]`)},
+		{"SetStorageAt", func(ctx context.Context, x *Anvil) error { return x.SetStorageAt(ctx, addr, "0x0", "0x1") },
+			calls("anvil_setStorageAt", `[`+a+`,"0x0","0x1"]`)},
+		{"Impersonate", func(ctx context.Context, x *Anvil) error { return x.Impersonate(ctx, addr) },
+			calls("anvil_impersonateAccount", `[`+a+`]`)},
+		{"StopImpersonating", func(ctx context.Context, x *Anvil) error { return x.StopImpersonating(ctx, addr) },
+			calls("anvil_stopImpersonatingAccount", `[`+a+`]`)},
+		{"AutoImpersonate", func(ctx context.Context, x *Anvil) error { return x.AutoImpersonate(ctx, true) },
+			calls("anvil_autoImpersonateAccount", `[true]`)},
+		{"SetAutomine", func(ctx context.Context, x *Anvil) error { return x.SetAutomine(ctx, false) },
+			calls("evm_setAutomine", `[false]`)},
+		{"SetIntervalMining", func(ctx context.Context, x *Anvil) error { return x.SetIntervalMining(ctx, 5) },
+			calls("evm_setIntervalMining", `[5]`)},
+		{"DropTransaction", func(ctx context.Context, x *Anvil) error { return x.DropTransaction(ctx, "0xdeadbeef") },
+			calls("anvil_dropTransaction", `["0xdeadbeef"]`)},
+		{"Snapshot", func(ctx context.Context, x *Anvil) error { _, err := x.Snapshot(ctx); return err },
+			calls("evm_snapshot", `[]`)},
+		{"Revert", func(ctx context.Context, x *Anvil) error { _, err := x.Revert(ctx, "0xabc"); return err },
+			calls("evm_revert", `["0xabc"]`)},
+		{"GetProof", func(ctx context.Context, x *Anvil) error { _, err := x.GetProof(ctx, addr, nil, nil); return err },
+			calls("eth_getProof", `[`+a+`,[],"latest"]`)},
+		{"GetProof at a block", func(ctx context.Context, x *Anvil) error {
+			_, err := x.GetProof(ctx, addr, []string{"0x1"}, big.NewInt(5))
+			return err
+		}, calls("eth_getProof", `[`+a+`,["0x1"],"0x5"]`)},
+		// evm_revert consumes the snapshot, so ResetState takes a new one.
+		{"ResetState", func(ctx context.Context, x *Anvil) error { x.baseline = "0x1"; return x.ResetState(ctx) },
+			calls("evm_revert", `["0x1"]`, "evm_snapshot", `[]`)},
+		{"WaitForMemPoolEmpty", func(ctx context.Context, x *Anvil) error { return x.WaitForMemPoolEmpty(ctx, time.Second) },
+			calls("txpool_status", `[]`)},
+		// anvil drops every snapshot on reset, so ResetFork takes a new baseline.
+		{"ResetFork", func(ctx context.Context, x *Anvil) error { return x.ResetFork(ctx, "https://example.org", 0) },
+			calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org"}}]`, "evm_snapshot", `[]`)},
+		{"ResetFork at a block", func(ctx context.Context, x *Anvil) error { return x.ResetFork(ctx, "https://example.org", 100) },
+			calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org","blockNumber":"0x64"}}]`, "evm_snapshot", `[]`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rs := newRPCServer(t, cannedResults)
+			require.NoError(t, tc.run(t.Context(), newTestAnvil(t, rs.server)))
 
-		require.NoError(t, a.Mine(ctx, 5, 12))
-		assert.JSONEq(t, `["0x5","0xc"]`, rs.lastCall().paramsJSON())
-	})
-	t.Run("DropTransaction", func(t *testing.T) {
-		require.NoError(t, a.DropTransaction(ctx, "0xdeadbeef"))
-		assert.Equal(t, "anvil_dropTransaction", rs.lastCall().Method)
-	})
-	t.Run("SetAutomine", func(t *testing.T) {
-		require.NoError(t, a.SetAutomine(ctx, true))
-		assert.Equal(t, "evm_setAutomine", rs.lastCall().Method)
-	})
-	t.Run("SetIntervalMining", func(t *testing.T) {
-		require.NoError(t, a.SetIntervalMining(ctx, 5))
-		assert.Equal(t, "evm_setIntervalMining", rs.lastCall().Method)
-	})
-	t.Run("AutoImpersonate", func(t *testing.T) {
-		require.NoError(t, a.AutoImpersonate(ctx, true))
-		assert.Equal(t, "anvil_autoImpersonateAccount", rs.lastCall().Method)
-	})
-	t.Run("ResetFork", func(t *testing.T) {
-		require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
-		require.GreaterOrEqual(t, len(rs.calls), 2)
-		reset := rs.calls[len(rs.calls)-2]
-		assert.Equal(t, "anvil_reset", reset.Method)
-		assert.JSONEq(t, `[{"forking":{"jsonRpcUrl":"https://example.org"}}]`, reset.paramsJSON())
-		// anvil drops all snapshots on reset, so ResetFork takes a new baseline.
-		assert.Equal(t, "evm_snapshot", rs.lastCall().Method)
-		assert.Equal(t, "0xabc", a.baseline)
+			got := rs.recorded()
+			require.Len(t, got, len(tc.want))
+			for i, want := range tc.want {
+				assert.Equal(t, want.Method, got[i].Method)
+				assert.JSONEq(t, string(want.Params[0]), got[i].paramsJSON(), want.Method)
+			}
+		})
+	}
+}
 
-		require.NoError(t, a.ResetFork(ctx, "https://example.org", 100))
-		assert.JSONEq(t, `[{"forking":{"jsonRpcUrl":"https://example.org","blockNumber":"0x64"}}]`,
-			rs.calls[len(rs.calls)-2].paramsJSON())
-	})
-	t.Run("GetProof", func(t *testing.T) {
-		result, err := a.GetProof(ctx, addr, nil, nil)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		assert.Equal(t, "eth_getProof", rs.lastCall().Method)
-		assert.Equal(t, addr, result.Address)
-	})
+// calls builds expected calls from method/params pairs.
+func calls(methodParams ...string) []rpcCall {
+	var out []rpcCall
+	for i := 0; i < len(methodParams); i += 2 {
+		out = append(out, rpcCall{Method: methodParams[i], Params: []json.RawMessage{json.RawMessage(methodParams[i+1])}})
+	}
+	return out
+}
+
+func TestRPCResults(t *testing.T) {
+	rs := newRPCServer(t, cannedResults)
+	a := newTestAnvil(t, rs.server)
+	ctx := t.Context()
+
+	id, err := a.Snapshot(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "0xabc", id)
+
+	ok, err := a.Revert(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	proof, err := a.GetProof(ctx, common.HexToAddress("0x1234567890123456789012345678901234567890"), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, common.HexToAddress("0x1234567890123456789012345678901234567890"), proof.Address)
+
+	require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
+	assert.Equal(t, "0xabc", a.baseline)
 }
 
 func TestRPCMethods_serverError(t *testing.T) {
 	rs := newRPCServer(t, map[string]any{}) // empty map → server returns method-not-found
 	a := newTestAnvil(t, rs.server)
-	ctx := context.Background()
 
-	err := a.MineBlock(ctx)
+	err := a.MineBlock(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "method not found")
 	// call prefixes the method name and keeps the JSON-RPC error reachable.
@@ -436,39 +459,39 @@ func TestRPCMethods_serverError(t *testing.T) {
 }
 
 func TestRPCMethods_ctxCancelled(t *testing.T) {
-	// Server sleeps long enough for ctx to cancel mid-call.
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(2 * time.Second)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
+	// The server never answers. Draining the body lets net/http notice the
+	// client hanging up and cancel r.Context(); release covers the case where
+	// it doesn't, so Close can't block.
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer slow.Close()
+	defer close(release)
 
 	a := newTestAnvil(t, slow)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
-	err := a.MineBlock(ctx)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
-		"expected ctx error, got %v", err)
+	require.ErrorIs(t, a.MineBlock(ctx), context.DeadlineExceeded)
 }
 
 func TestRPCMetricsIncrement(t *testing.T) {
-	rs := newRPCServer(t, map[string]any{
-		"evm_mine":     nil,
-		"evm_snapshot": "0xa",
-	})
+	rs := newRPCServer(t, cannedResults)
 	a := newTestAnvil(t, rs.server)
 	ctx := context.Background()
 
 	require.NoError(t, a.MineBlock(ctx))
-	require.NoError(t, a.MineBlock(ctx))
+	require.NoError(t, a.Mine(ctx, 5, 0))
 	_, err := a.Snapshot(ctx)
 	require.NoError(t, err)
 
 	m := a.Metrics()
-	assert.Equal(t, uint64(2), m.BlocksMined)
+	assert.Equal(t, uint64(6), m.BlocksMined)
 	assert.Equal(t, int64(3), m.RPCCalls)
 }
 

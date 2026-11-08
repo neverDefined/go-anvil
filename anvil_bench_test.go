@@ -4,34 +4,10 @@ import (
 	"context"
 	"math/big"
 	"testing"
-	"time"
-
-	"github.com/rs/zerolog"
 )
 
-// setupBenchAnvil spins up a single anvil instance for a benchmark and returns it.
-// Callers must call b.Cleanup for close; this helper registers that automatically.
-func setupBenchAnvil(b *testing.B) *Anvil {
-	b.Helper()
-	anvil, err := NewAnvilBuilder().
-		WithLogLevel(zerolog.Disabled).
-		WithPort(getTestPort()).
-		Build()
-	if err != nil {
-		b.Fatalf("build anvil: %v", err)
-	}
-	if err := anvil.Start(); err != nil {
-		b.Fatalf("start anvil: %v", err)
-	}
-	b.Cleanup(func() {
-		_ = anvil.Close()
-		time.Sleep(time.Second)
-	})
-	return anvil
-}
-
 func BenchmarkMineBlock(b *testing.B) {
-	anvil := setupBenchAnvil(b)
+	anvil := startAnvil(b, NewAnvilBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -42,7 +18,7 @@ func BenchmarkMineBlock(b *testing.B) {
 }
 
 func BenchmarkSetBalance(b *testing.B) {
-	anvil := setupBenchAnvil(b)
+	anvil := startAnvil(b, NewAnvilBuilder())
 	ctx := context.Background()
 	_, addrs, err := anvil.Accounts()
 	if err != nil {
@@ -58,7 +34,7 @@ func BenchmarkSetBalance(b *testing.B) {
 }
 
 func BenchmarkSnapshotRevertCycle(b *testing.B) {
-	anvil := setupBenchAnvil(b)
+	anvil := startAnvil(b, NewAnvilBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -72,10 +48,10 @@ func BenchmarkSnapshotRevertCycle(b *testing.B) {
 	}
 }
 
-// BenchmarkResetState measures the fast snapshot-based reset used between tests.
-// First iteration primes the initial snapshot; subsequent iterations revert to it.
+// BenchmarkResetState measures one ResetState: a revert to the baseline taken
+// in Start plus a fresh snapshot.
 func BenchmarkResetState(b *testing.B) {
-	anvil := setupBenchAnvil(b)
+	anvil := startAnvil(b, NewAnvilBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

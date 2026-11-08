@@ -35,7 +35,7 @@ jobs:
         run: anvil --version
 
       - name: go test -race (with coverage)
-        run: go test -race -v -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -race -shuffle=on -v -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'

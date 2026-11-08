@@ -7,7 +7,7 @@ Guidance for Claude Code when working in this repo. Read this first — it captu
 `go-anvil` is a Go library that wraps Foundry's `anvil` local EVM node so Go tests can spawn one programmatically. Flat single-package layout:
 
 - `anvil.go` — all public API, lifecycle (spawn subprocess + RPC client), builder.
-- `*_test.go` — `anvil_test.go` and `lifecycle_test.go` need `anvil` on `PATH`; `anvil_unit_test.go` doesn't; `fork_test.go` is behind the `fork` build tag.
+- `*_test.go` — `anvil_test.go` and `lifecycle_test.go` start real anvil instances and skip when it isn't installed (they fail instead when `CI` is set); `anvil_unit_test.go` uses a fake RPC server; `fork_test.go` is behind the `fork` build tag.
 - `helpers.go` — small utilities (e.g. `(*Anvil).WaitForMemPoolEmpty`).
 
 Module path: `github.com/neverDefined/go-anvil`.
@@ -16,7 +16,7 @@ Module path: `github.com/neverDefined/go-anvil`.
 
 ```
 make check    # fmt + vet + golangci-lint + go test -race
-make test     # go test -race ./... (requires anvil on PATH)
+make test     # go test -race -shuffle=on ./... (integration tests skip without anvil)
 make lint     # golangci-lint run
 govulncheck ./...
 ```
@@ -25,7 +25,7 @@ If `anvil` isn't on `PATH`, `make check-foundry` tells you.
 
 ## Non-obvious conventions
 
-**Shared-anvil test pattern.** Tests reuse a single `*Anvil` instance via `setupSharedAnvil(t, sharedAnvil)` (see `anvil_test.go`). `ResetState()` between subtests uses snapshot/revert rather than process restart — ~10× faster than spawning a new anvil per test. Only drop to `setupTestAnvil(t, cfg)` when a test truly needs custom config (e.g. forking from a specific URL). Do not introduce new top-level `anvil.NewAnvil()` calls inside test subtests.
+**One anvil per test.** Integration tests call `startAnvil(t, NewAnvilBuilder()...)`, which starts a fresh instance on a port anvil picks and closes it when the test ends. Startup takes about 50 ms, so integration tests call `t.Parallel()` and own their instance; nothing depends on test order. Assert what a call changed on the chain (a balance, code, a block time), not only that it returned nil. Don't add `time.Sleep`. `evm_mine` and the setters take effect before they return, and `WaitForBlock` covers block production. With automine, a transaction is mined just after `eth_sendTransaction` returns, so wait for it with the `receipt` test helper. Each wrapper also has a row in `TestRPCWrappers` pinning its method and params.
 
 **RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards through `a.call(ctx, result, method, args...)`. `call` returns `ErrNotStarted` unless the instance is running, counts the call, uses `CallContext`, and wraps errors with the method name (`anvil: anvil_setFoo: ...`). Don't use `a.rpcClient` directly: you lose the lifecycle check, and a bare `Call(nil, ...)` also loses cancellation and timeouts. Don't log errors you return; the caller decides. When adding a new RPC wrapper, follow this shape:
 
