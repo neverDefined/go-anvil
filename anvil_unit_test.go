@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,47 +183,6 @@ func TestResolveAnvilPath(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// retry helper
-// -----------------------------------------------------------------------------
-
-func TestRetry(t *testing.T) {
-	t.Run("success on first attempt", func(t *testing.T) {
-		var calls int32
-		err := retry(5, time.Millisecond, func() error {
-			atomic.AddInt32(&calls, 1)
-			return nil
-		})
-		require.NoError(t, err)
-		assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
-	})
-
-	t.Run("success after N retries", func(t *testing.T) {
-		var calls int32
-		err := retry(5, time.Millisecond, func() error {
-			n := atomic.AddInt32(&calls, 1)
-			if n < 3 {
-				return errors.New("not yet")
-			}
-			return nil
-		})
-		require.NoError(t, err)
-		assert.Equal(t, int32(3), atomic.LoadInt32(&calls))
-	})
-
-	t.Run("attempts exhausted returns last error", func(t *testing.T) {
-		var calls int32
-		sentinel := errors.New("always fail")
-		err := retry(3, time.Millisecond, func() error {
-			atomic.AddInt32(&calls, 1)
-			return sentinel
-		})
-		require.Error(t, err)
-		assert.Equal(t, int32(3), atomic.LoadInt32(&calls))
-		assert.Equal(t, sentinel, err)
-	})
-}
-
-// -----------------------------------------------------------------------------
 // Error sentinels — errors.Is propagation
 // -----------------------------------------------------------------------------
 
@@ -233,9 +191,7 @@ func TestSentinelErrorsAreWrappable(t *testing.T) {
 		ErrNotStarted,
 		ErrAlreadyStarted,
 		ErrConnectionFailed,
-		ErrProcessNotFound,
 		ErrInvalidConfig,
-		ErrRPCCallFailed,
 		ErrAnvilNotFound,
 		ErrAnvilNotExecutable,
 		ErrStartupTimeout,
@@ -260,6 +216,12 @@ type rpcServer struct {
 type rpcCall struct {
 	Method string
 	Params []json.RawMessage
+}
+
+// paramsJSON returns the call's params as one JSON array.
+func (c rpcCall) paramsJSON() string {
+	b, _ := json.Marshal(c.Params)
+	return string(b)
 }
 
 type rpcReq struct {
@@ -409,10 +371,15 @@ func TestRPCMethods_sendCorrectMethod(t *testing.T) {
 	t.Run("SetNonce", func(t *testing.T) {
 		require.NoError(t, a.SetNonce(ctx, addr, 42))
 		assert.Equal(t, "anvil_setNonce", rs.lastCall().Method)
+		assert.JSONEq(t, `["0x1234567890123456789012345678901234567890","0x2a"]`, rs.lastCall().paramsJSON())
 	})
 	t.Run("Mine", func(t *testing.T) {
 		require.NoError(t, a.Mine(ctx, 5, 0))
 		assert.Equal(t, "anvil_mine", rs.lastCall().Method)
+		assert.JSONEq(t, `["0x5"]`, rs.lastCall().paramsJSON())
+
+		require.NoError(t, a.Mine(ctx, 5, 12))
+		assert.JSONEq(t, `["0x5","0xc"]`, rs.lastCall().paramsJSON())
 	})
 	t.Run("DropTransaction", func(t *testing.T) {
 		require.NoError(t, a.DropTransaction(ctx, "0xdeadbeef"))
@@ -433,10 +400,16 @@ func TestRPCMethods_sendCorrectMethod(t *testing.T) {
 	t.Run("ResetFork", func(t *testing.T) {
 		require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
 		require.GreaterOrEqual(t, len(rs.calls), 2)
-		assert.Equal(t, "anvil_reset", rs.calls[len(rs.calls)-2].Method)
+		reset := rs.calls[len(rs.calls)-2]
+		assert.Equal(t, "anvil_reset", reset.Method)
+		assert.JSONEq(t, `[{"forking":{"jsonRpcUrl":"https://example.org"}}]`, reset.paramsJSON())
 		// anvil drops all snapshots on reset, so ResetFork takes a new baseline.
 		assert.Equal(t, "evm_snapshot", rs.lastCall().Method)
 		assert.Equal(t, "0xabc", a.baseline)
+
+		require.NoError(t, a.ResetFork(ctx, "https://example.org", 100))
+		assert.JSONEq(t, `[{"forking":{"jsonRpcUrl":"https://example.org","blockNumber":"0x64"}}]`,
+			rs.calls[len(rs.calls)-2].paramsJSON())
 	})
 	t.Run("GetProof", func(t *testing.T) {
 		result, err := a.GetProof(ctx, addr, nil, nil)
@@ -455,6 +428,11 @@ func TestRPCMethods_serverError(t *testing.T) {
 	err := a.MineBlock(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "method not found")
+	// call prefixes the method name and keeps the JSON-RPC error reachable.
+	assert.Regexp(t, `^anvil: evm_mine: `, err.Error())
+	var rpcErr rpc.Error
+	require.ErrorAs(t, err, &rpcErr)
+	assert.Equal(t, -32601, rpcErr.ErrorCode())
 }
 
 func TestRPCMethods_ctxCancelled(t *testing.T) {

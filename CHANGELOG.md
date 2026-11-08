@@ -20,9 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Start()` waits for anvil's `Listening on` line instead of polling the RPC endpoint every 50ms.
 - `Close()` and `Stop()` are now the same call.
 - `Build()` rejects a non-numeric or out-of-range port with `ErrInvalidConfig`.
-- `DefaultConfig.DefaultRPCURL` no longer has any effect; the endpoint comes from the port anvil binds.
 - `Start()` takes one `evm_snapshot` as the `ResetState` baseline, so the first ID returned by `Snapshot()` is no longer `0x0`.
 - `ResetFork()` takes a new `ResetState` baseline, because anvil discards all snapshots on reset.
+- The library no longer logs errors it also returns, and `WaitForBlock` no longer logs at Debug on every poll. Errors from RPC methods start with the method name instead (`anvil: evm_mine: ...`).
+
+### Removed
+
+- `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read: use `WithLogLevel`, and `WithPort` plus `URL()` for the endpoint.
+- `ErrProcessNotFound` and `ErrRPCCallFailed`, which nothing returned.
+- `MemPoolEmpty(ctx, client)`, deprecated in 0.1.0. Use `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` (#61).
 
 ### Fixed
 

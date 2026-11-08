@@ -2,7 +2,7 @@
 description: Scaffold a new RPC wrapper method on *Anvil, plus a minimal test stub.
 ---
 
-Scaffold a new RPC method following the go-anvil repo convention. The shape is documented in `CLAUDE.md`: context-first signature, forward through `a.call`, error logged and returned, godoc starting with the method name.
+Scaffold a new RPC method following the go-anvil repo convention. The shape is documented in `CLAUDE.md`: context-first signature, forward through `a.call` and return its error, godoc starting with the method name.
 
 ## Arguments
 
@@ -29,11 +29,7 @@ If arguments are missing, ask the user for:
    // <MethodName> <one-line purpose>.
    // Returns an error if the RPC call fails or if ctx is canceled.
    func (a *Anvil) <MethodName>(ctx context.Context, <params>) error {
-       if err := a.call(ctx, nil, "<rpc_method_name>", <param-names>); err != nil {
-           a.logger.Error().Err(err).<field-methods>.Msg("Failed to <verb>")
-           return err
-       }
-       return nil
+       return a.call(ctx, nil, "<rpc_method_name>", <param-names>)
    }
    ```
 

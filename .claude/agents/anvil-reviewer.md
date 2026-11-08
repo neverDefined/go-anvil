@@ -16,7 +16,7 @@ You are reviewing changes to the `go-anvil` library. The library wraps Foundry's
 
 **Godoc on exports.** Every exported identifier has a godoc comment starting with the identifier name. `revive` in `.golangci.yml` enforces this — but flag missing godoc in review anyway so the author fixes it before CI.
 
-**RPC-method template.** New RPC wrappers must match the shape documented in `CLAUDE.md`: `a.call(ctx, ...)`, `a.logger.Error().Err(err)...Msg("Failed to ...")`, return err. Deviations are only OK with a clear reason in the PR body.
+**RPC-method template.** New RPC wrappers must match the shape documented in `CLAUDE.md`: return `a.call(ctx, ...)`'s error without logging it (`call` already names the method). Deviations are only OK with a clear reason in the PR body.
 
 **Startup lifecycle.** `context.WithCancel` in `Build` and the `//nolint:gosec` on that line are intentional — the cancel is invoked in `Stop()`. Any change that removes the `//nolint` or moves the cancel without preserving the invariant is a bug.
 

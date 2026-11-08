@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -179,7 +178,7 @@ func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) 
 			if ctx.Err() != nil {
 				return fmt.Errorf("waiting for empty mempool: %w", ctx.Err())
 			}
-			return fmt.Errorf("query txpool status: %w", err)
+			return err
 		}
 		if status.Pending == 0 && status.Queued == 0 {
 			return nil
@@ -189,33 +188,6 @@ func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) 
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for empty mempool: %w", ctx.Err())
 		case <-ticker.C:
-		}
-	}
-}
-
-// MemPoolEmpty waits for the memory pool to be empty (no pending transactions).
-// It polls every 100ms for up to 5 seconds.
-//
-// Deprecated: Use (*Anvil).WaitForMemPoolEmpty instead. The method honors the
-// ctx deadline directly, accepts a configurable timeout, and uses the instance's
-// own client rather than a passed-in one.
-func MemPoolEmpty(ctx context.Context, client *ethclient.Client) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.After(5 * time.Second)
-
-	for {
-		select {
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for pending transactions")
-		case <-ticker.C:
-			pending, err := client.PendingTransactionCount(ctx)
-			if err != nil {
-				return err
-			}
-			if pending == 0 {
-				return nil
-			}
 		}
 	}
 }
