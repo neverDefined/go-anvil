@@ -154,6 +154,11 @@ func parseStorageKey(key string) ([]byte, error) {
 // whichever comes first. A zero or negative timeout means "use ctx's deadline only."
 // Returns an error if the timeout is exceeded, ctx is canceled, or the query fails.
 func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) error {
+	_, client, err := a.clients()
+	if err != nil {
+		return err
+	}
+
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -168,7 +173,7 @@ func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) 
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for empty mempool: %w", ctx.Err())
 		case <-ticker.C:
-			pending, err := a.client.PendingTransactionCount(ctx)
+			pending, err := client.PendingTransactionCount(ctx)
 			if err != nil {
 				return fmt.Errorf("query pending transaction count: %w", err)
 			}

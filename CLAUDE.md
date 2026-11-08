@@ -7,7 +7,7 @@ Guidance for Claude Code when working in this repo. Read this first — it captu
 `go-anvil` is a Go library that wraps Foundry's `anvil` local EVM node so Go tests can spawn one programmatically. Flat single-package layout:
 
 - `anvil.go` — all public API, lifecycle (spawn subprocess + RPC client), builder.
-- `anvil_test.go` — all tests. Integration-only; require `anvil` on `PATH`.
+- `*_test.go` — `anvil_test.go` and `lifecycle_test.go` need `anvil` on `PATH`; `anvil_unit_test.go` doesn't; `fork_test.go` is behind the `fork` build tag.
 - `helpers.go` — small utilities (e.g. `(*Anvil).WaitForMemPoolEmpty`).
 
 Module path: `github.com/neverDefined/go-anvil`.
@@ -27,12 +27,11 @@ If `anvil` isn't on `PATH`, `make check-foundry` tells you.
 
 **Shared-anvil test pattern.** Tests reuse a single `*Anvil` instance via `setupSharedAnvil(t, sharedAnvil)` (see `anvil_test.go`). `ResetState()` between subtests uses snapshot/revert rather than process restart — ~10× faster than spawning a new anvil per test. Only drop to `setupTestAnvil(t, cfg)` when a test truly needs custom config (e.g. forking from a specific URL). Do not introduce new top-level `anvil.NewAnvil()` calls inside test subtests.
 
-**RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards to `a.rpcClient.CallContext(ctx, ...)`. Do not regress to bare `Call(nil, ...)` — it removes cancellation and timeout support for callers. When adding a new RPC wrapper, follow this shape:
+**RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards through `a.call(ctx, result, method, args...)`. `call` returns `ErrNotStarted` unless the instance is running, counts the call, and uses `CallContext`. Don't use `a.rpcClient` directly: you lose the lifecycle check, and a bare `Call(nil, ...)` also loses cancellation and timeouts. When adding a new RPC wrapper, follow this shape:
 
 ```go
 func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
-    a.rpcCalls.Add(1)
-    if err := a.rpcClient.CallContext(ctx, nil, "anvil_setFoo", arg); err != nil {
+    if err := a.call(ctx, nil, "anvil_setFoo", arg); err != nil {
         a.logger.Error().Err(err).Str("arg", fmt.Sprint(arg)).Msg("Failed to set foo")
         return err
     }
@@ -45,6 +44,8 @@ func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
 **Error wrapping.** Always `fmt.Errorf("...: %w", err)`. Sentinel errors are defined at `anvil.go` top; prefer them where they make sense instead of ad-hoc messages.
 
 **Godoc on exports is enforced.** `revive` is in `.golangci.yml`; every exported identifier needs a godoc comment starting with the identifier name. Don't ship PRs that regress this.
+
+**Process lifecycle.** An instance is single-use: new → running → stopped, guarded by `a.mu`. By default `Build()` passes `--port 0`, and `Start()` reads the bound address from anvil's `Listening on ...` stdout line, which doubles as the readiness signal. If the process exits first, `Start()` returns `ErrProcessExited`. `Close()` and `Stop()` share one shutdown path that kills and reaps the process.
 
 **Context lifecycle.** `Build()` creates `context.WithCancel(context.Background())`; the cancel is stored on `Anvil.cancel` and invoked inside `Stop()` (which `Close()` delegates to). The `//nolint:gosec` at the `context.WithCancel` line is intentional — gosec can't follow the cross-function flow. Keep that comment if you move the code.
 

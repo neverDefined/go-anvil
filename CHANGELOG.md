@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `GetProof(ctx, address, storageKeys, blockNumber)` — EIP-1186 `eth_getProof` wrapper returning `*AccountResult`, for light-client style tests (#84).
 - `VerifyProof(stateRoot, proof)` — verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
+- `URL()` returns the node's HTTP JSON-RPC endpoint.
+- `ErrProcessExited`, returned by `Start()` when anvil exits before it is ready.
+
+### Changed
+
+- **Behavior change:** without `WithPort`, anvil now picks a free port instead of using 8545. Use `URL()` to find it, or `WithPort("8545")` to keep the old behavior.
+- `Start()` waits for anvil's `Listening on` line instead of polling the RPC endpoint every 50ms.
+- `Close()` and `Stop()` are now the same call.
+- `Build()` rejects a non-numeric or out-of-range port with `ErrInvalidConfig`.
+- `DefaultConfig.DefaultRPCURL` no longer has any effect; the endpoint comes from the port anvil binds.
+
+### Fixed
+
+- `Start()` no longer reports success while connected to another process when the port is already in use. It returns `ErrProcessExited` with anvil's error.
+- `Start()` returns as soon as anvil exits during startup (for example, on an invalid flag), with anvil's stderr in the error, instead of waiting for the full startup timeout.
+- RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. Instances are single-use, so this also applies after a failed `Start()`. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
+- `Close()` no longer sleeps for 1 second after the process has exited (#80).
 
 ### Changed
 

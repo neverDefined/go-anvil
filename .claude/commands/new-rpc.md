@@ -2,7 +2,7 @@
 description: Scaffold a new RPC wrapper method on *Anvil, plus a minimal test stub.
 ---
 
-Scaffold a new RPC method following the go-anvil repo convention. The shape is documented in `CLAUDE.md`: context-first signature, `rpcCalls.Add(1)`, `CallContext`, error logged and returned, godoc starting with the method name.
+Scaffold a new RPC method following the go-anvil repo convention. The shape is documented in `CLAUDE.md`: context-first signature, forward through `a.call`, error logged and returned, godoc starting with the method name.
 
 ## Arguments
 
@@ -29,8 +29,7 @@ If arguments are missing, ask the user for:
    // <MethodName> <one-line purpose>.
    // Returns an error if the RPC call fails or if ctx is canceled.
    func (a *Anvil) <MethodName>(ctx context.Context, <params>) error {
-       a.rpcCalls.Add(1)
-       if err := a.rpcClient.CallContext(ctx, nil, "<rpc_method_name>", <param-names>); err != nil {
+       if err := a.call(ctx, nil, "<rpc_method_name>", <param-names>); err != nil {
            a.logger.Error().Err(err).<field-methods>.Msg("Failed to <verb>")
            return err
        }
@@ -38,7 +37,7 @@ If arguments are missing, ask the user for:
    }
    ```
 
-4. **Methods that return a result** (like `Snapshot` returning a snapshot ID, `Revert` returning a bool): adjust signature to `(ctx, ...) (T, error)`, bind the result to a local variable, and pass `&result` to `CallContext`.
+4. **Methods that return a result** (like `Snapshot` returning a snapshot ID, `Revert` returning a bool): adjust signature to `(ctx, ...) (T, error)`, bind the result to a local variable, and pass `&result` to `a.call`.
 
 5. Add a minimal subtest in `anvil_test.go` under `TestAnvil` following the shared-anvil pattern:
 

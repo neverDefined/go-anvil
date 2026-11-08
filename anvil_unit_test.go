@@ -44,19 +44,24 @@ func TestAnvilBuilder_validate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "default builder is valid",
+			name:    "default builder is valid (anvil picks the port)",
 			builder: NewAnvilBuilder(),
 			wantErr: false,
 		},
 		{
-			name:    "empty rpcURL fails",
-			builder: &AnvilBuilder{rpcURL: ""},
+			name:    "numeric port is valid",
+			builder: NewAnvilBuilder().WithPort("8545"),
+			wantErr: false,
+		},
+		{
+			name:    "non-numeric port fails",
+			builder: NewAnvilBuilder().WithPort("http"),
 			wantErr: true,
 		},
 		{
-			name:    "non-empty rpcURL is valid",
-			builder: &AnvilBuilder{rpcURL: "http://127.0.0.1:8545"},
-			wantErr: false,
+			name:    "out-of-range port fails",
+			builder: NewAnvilBuilder().WithPort("70000"),
+			wantErr: true,
 		},
 	}
 	for _, tc := range cases {
@@ -84,6 +89,12 @@ func TestAnvilBuilder_WithStartupTimeout(t *testing.T) {
 		b := NewAnvilBuilder().WithStartupTimeout(-time.Second)
 		assert.Equal(t, DefaultStartupTimeout, b.startupTimeout)
 	})
+}
+
+func TestAnvilBuilder_ZeroValueUsesDefaultStartupTimeout(t *testing.T) {
+	a, err := (&AnvilBuilder{}).Build()
+	require.NoError(t, err)
+	assert.Equal(t, DefaultStartupTimeout, a.startupTimeout)
 }
 
 func TestAnvilBuilder_BuildPropagatesStartupTimeout(t *testing.T) {
@@ -314,6 +325,7 @@ func newTestAnvil(t *testing.T, server *httptest.Server) *Anvil {
 	return &Anvil{
 		context:   ctx,
 		cancel:    cancel,
+		state:     stateRunning,
 		rpcClient: rpcClient,
 		logger:    zerolog.New(io.Discard),
 	}
