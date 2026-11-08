@@ -57,8 +57,6 @@ var (
 )
 
 // AnvilConfig holds the configuration for Anvil client
-//
-//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilConfig struct {
 	DefaultTimeout time.Duration
 	StartupSleep   time.Duration
@@ -86,8 +84,6 @@ var DefaultConfig = AnvilConfig{
 const DefaultStartupTimeout = 5 * time.Second
 
 // AnvilMetrics contains runtime metrics for the Anvil instance
-//
-//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilMetrics struct {
 	StartupTime   time.Duration
 	BlocksMined   uint64
@@ -97,8 +93,6 @@ type AnvilMetrics struct {
 }
 
 // AnvilPrivateKey represents the default test account private keys
-//
-//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilPrivateKey string
 
 // AnvilPrivateKeys are the default Anvil private keys for testing.
@@ -754,8 +748,6 @@ func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
 
 // AnvilBuilder helps construct Anvil instances using the builder pattern.
 // It allows for flexible configuration of Anvil options before creating the instance.
-//
-//nolint:revive // Name is intentionally prefixed for clarity
 type AnvilBuilder struct {
 	args           []string
 	rpcURL         string
