@@ -27,7 +27,7 @@ If `anvil` isn't on `PATH`, `make check-foundry` tells you.
 
 **One anvil per test.** Integration tests call `startAnvil(t, NewAnvilBuilder()...)`, which starts a fresh instance on a port anvil picks and closes it when the test ends. Startup takes about 50 ms, so integration tests call `t.Parallel()` and own their instance; nothing depends on test order. Assert what a call changed on the chain (a balance, code, a block time), not only that it returned nil. Don't add `time.Sleep`. `evm_mine` and the setters take effect before they return, and `WaitForBlock` covers block production. With automine, a transaction is mined just after `eth_sendTransaction` returns, so wait for it with the `receipt` test helper. Each wrapper also has a row in `TestRPCWrappers` pinning its method and params.
 
-**RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards through `a.call(ctx, result, method, args...)`. `call` returns `ErrNotStarted` unless the instance is running, counts the call, uses `CallContext`, and wraps errors with the method name (`anvil: anvil_setFoo: ...`). Don't use `a.rpcClient` directly: you lose the lifecycle check, and a bare `Call(nil, ...)` also loses cancellation and timeouts. Don't log errors you return; the caller decides. When adding a new RPC wrapper, follow this shape:
+**RPC methods are context-first.** Every mutating RPC method takes `ctx context.Context` as its first parameter and forwards through `a.call(ctx, result, method, args...)`. `call` returns `ErrNotStarted` unless the instance is running, uses `CallContext`, and wraps errors with the method name (`anvil: anvil_setFoo: ...`). Don't use `a.rpcClient` directly: you lose the lifecycle check, and a bare `Call(nil, ...)` also loses cancellation and timeouts. Don't log errors you return; the caller decides. When adding a new RPC wrapper, follow this shape:
 
 ```go
 func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
@@ -35,7 +35,7 @@ func (a *Anvil) SetFoo(ctx context.Context, arg T) error {
 }
 ```
 
-**Builder pattern.** All `With*` methods are setters that return `*AnvilBuilder` for chaining; they don't validate. Validation lives in `Build()` (`validate()` is called at the top). When adding a new option, follow this split.
+**Builder pattern.** All `With*` methods store a typed field and return `*AnvilBuilder` for chaining; they don't validate. Validation lives in `Build()` (`validate()` is called at the top), and `renderArgs()` turns the fields into anvil flags. When adding a new option, follow this split. Anvil flags without a method go through `WithArgs`.
 
 **Error wrapping.** Always `fmt.Errorf("...: %w", err)`. Sentinel errors are defined at `anvil.go` top; prefer them where they make sense instead of ad-hoc messages.
 

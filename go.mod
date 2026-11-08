@@ -4,7 +4,6 @@ go 1.25.7
 
 require (
 	github.com/ethereum/go-ethereum v1.17.10
-	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 )
 
@@ -30,7 +29,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.1 // indirect

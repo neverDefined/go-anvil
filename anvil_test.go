@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,16 +35,24 @@ func requireAnvil(tb testing.TB) {
 	tb.Skipf("skipping integration test: %v", err)
 }
 
-// startAnvil builds and starts an instance with logging off, and closes it
-// when the test ends.
+// startAnvil builds and starts an instance and closes it when the test ends.
 func startAnvil(tb testing.TB, b *AnvilBuilder) *Anvil {
 	tb.Helper()
 	requireAnvil(tb)
-	a, err := b.WithLogLevel(zerolog.Disabled).Build()
+	a, err := b.Build()
 	require.NoError(tb, err)
 	require.NoError(tb, a.Start())
 	tb.Cleanup(func() { _ = a.Close() })
 	return a
+}
+
+func addresses(a *Anvil) []common.Address {
+	accounts := a.Accounts()
+	out := make([]common.Address, len(accounts))
+	for i, account := range accounts {
+		out[i] = account.Address
+	}
+	return out
 }
 
 func head(t *testing.T, a *Anvil) *types.Header {
@@ -72,6 +79,14 @@ func sendTx(ctx context.Context, a *Anvil, from, to common.Address, wei int64) (
 		"value": hexutil.EncodeBig(big.NewInt(wei)),
 	})
 	return hash, err
+}
+
+// waitForBlock calls WaitForBlock with a deadline.
+func waitForBlock(t *testing.T, a *Anvil, number uint64, timeout time.Duration) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	return a.WaitForBlock(ctx, number)
 }
 
 // receipt waits for hash to be mined. With automine on, anvil mines the
@@ -105,43 +120,46 @@ func TestBuilderOptions(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	a := startAnvil(t, NewAnvilBuilder().
-		WithChainID("1337").
-		WithGasLimit("12000000").
-		WithGasPrice("20000000000"))
+		WithChainID(1337).
+		WithGasLimit(12_000_000))
 
 	chainID, err := a.Client().ChainID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1337), chainID.Int64())
 
 	assert.Equal(t, uint64(12_000_000), head(t, a).GasLimit)
-	// WithGasPrice is only checked for being accepted: on anvil 1.9 with the
-	// default hardfork, eth_gasPrice and default fees stay at 2 gwei either way.
+}
+
+func TestWithArgs(t *testing.T) {
+	t.Parallel()
+	a := startAnvil(t, NewAnvilBuilder().WithArgs("--hardfork", "berlin", "--gas-price", "20000000000"))
+
+	// anvil only uses --gas-price before the London hardfork.
+	gasPrice, err := a.Client().SuggestGasPrice(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(20_000_000_000), gasPrice.Int64())
 }
 
 func TestBlockTime(t *testing.T) {
 	t.Parallel()
-	a := startAnvil(t, NewAnvilBuilder().WithBlockTime("1"))
+	a := startAnvil(t, NewAnvilBuilder().WithBlockTime(200*time.Millisecond))
 
 	// Blocks arrive without MineBlock.
-	require.NoError(t, a.WaitForBlock(1, 5*time.Second))
+	require.NoError(t, waitForBlock(t, a, 2, 5*time.Second))
 }
 
 func TestAccounts(t *testing.T) {
 	t.Parallel()
 	a := startAnvil(t, NewAnvilBuilder())
 
-	_, addrs, err := a.Accounts()
-	require.NoError(t, err)
+	var want []common.Address
+	require.NoError(t, a.RPCClient().CallContext(t.Context(), &want, "eth_accounts"))
 
-	// anvil's first three default accounts. A wrong key derives a different address.
-	want := []common.Address{
-		common.HexToAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"),
-		common.HexToAddress("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
-		common.HexToAddress("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"),
-	}
-	assert.Equal(t, want, addrs[:])
-	for _, addr := range addrs {
-		assert.Positive(t, balanceOf(t, a, addr).Sign(), "%s should be funded", addr)
+	accounts := a.Accounts()
+	require.Len(t, accounts, len(want))
+	for i, account := range accounts {
+		assert.Equal(t, want[i], account.Address, "account %d", i)
+		assert.Positive(t, balanceOf(t, a, account.Address).Sign(), "account %d should be funded", i)
 	}
 }
 
@@ -245,7 +263,7 @@ func TestSetCode(t *testing.T) {
 	a := startAnvil(t, NewAnvilBuilder())
 
 	code := hexutil.MustDecode("0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe")
-	require.NoError(t, a.SetCode(ctx, stranger, hexutil.Encode(code)))
+	require.NoError(t, a.SetCode(ctx, stranger, code))
 
 	got, err := a.Client().CodeAt(ctx, stranger, nil)
 	require.NoError(t, err)
@@ -259,7 +277,7 @@ func TestSetStorageAt(t *testing.T) {
 
 	slot := common.HexToHash("0x1")
 	value := common.HexToHash("0x2a")
-	require.NoError(t, a.SetStorageAt(ctx, stranger, slot.Hex(), value.Hex()))
+	require.NoError(t, a.SetStorageAt(ctx, stranger, slot, value))
 
 	got, err := a.Client().StorageAt(ctx, stranger, slot, nil)
 	require.NoError(t, err)
@@ -307,8 +325,7 @@ func TestSetAutomine(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	a := startAnvil(t, NewAnvilBuilder())
-	_, addrs, err := a.Accounts()
-	require.NoError(t, err)
+	addrs := addresses(a)
 
 	require.NoError(t, a.SetAutomine(ctx, false))
 	hash, err := sendTx(ctx, a, addrs[0], addrs[1], 1)
@@ -333,11 +350,11 @@ func TestSetIntervalMining(t *testing.T) {
 	a := startAnvil(t, NewAnvilBuilder())
 
 	require.NoError(t, a.SetIntervalMining(ctx, 1))
-	require.NoError(t, a.WaitForBlock(1, 5*time.Second))
+	require.NoError(t, waitForBlock(t, a, 1, 5*time.Second))
 
 	require.NoError(t, a.SetIntervalMining(ctx, 0))
 	n := head(t, a).Number.Uint64()
-	err := a.WaitForBlock(n+1, 1500*time.Millisecond)
+	err := waitForBlock(t, a, n+1, 1500*time.Millisecond)
 	require.ErrorIs(t, err, context.DeadlineExceeded, "no block should arrive once interval mining is off")
 }
 
@@ -345,16 +362,21 @@ func TestDropTransaction(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	a := startAnvil(t, NewAnvilBuilder())
-	_, addrs, err := a.Accounts()
-	require.NoError(t, err)
+	addrs := addresses(a)
 
 	require.NoError(t, a.SetAutomine(ctx, false))
 	hash, err := sendTx(ctx, a, addrs[0], addrs[1], 1)
 	require.NoError(t, err)
 
-	require.NoError(t, a.DropTransaction(ctx, hash.Hex()))
-	require.NoError(t, a.MineBlock(ctx))
+	dropped, err := a.DropTransaction(ctx, hash)
+	require.NoError(t, err)
+	assert.True(t, dropped)
 
+	dropped, err = a.DropTransaction(ctx, hash)
+	require.NoError(t, err)
+	assert.False(t, dropped, "the transaction is no longer in the pool")
+
+	require.NoError(t, a.MineBlock(ctx))
 	block, err := a.Client().BlockByNumber(ctx, nil)
 	require.NoError(t, err)
 	assert.Empty(t, block.Transactions())
@@ -380,6 +402,18 @@ func TestSnapshotRevert(t *testing.T) {
 	ok, err = a.Revert(ctx, id)
 	require.NoError(t, err)
 	assert.False(t, ok)
+
+	// It also discards snapshots taken after it.
+	first, err := a.Snapshot(ctx)
+	require.NoError(t, err)
+	second, err := a.Snapshot(ctx)
+	require.NoError(t, err)
+	ok, err = a.Revert(ctx, first)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = a.Revert(ctx, second)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestResetState(t *testing.T) {
@@ -389,8 +423,7 @@ func TestResetState(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
 		a := startAnvil(t, NewAnvilBuilder())
-		_, addrs, err := a.Accounts()
-		require.NoError(t, err)
+		addrs := addresses(a)
 		funded := balanceOf(t, a, addrs[0])
 
 		require.NoError(t, a.SetBalance(ctx, addrs[0], big.NewInt(1)))
@@ -449,11 +482,10 @@ func TestGetProof(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	a := startAnvil(t, NewAnvilBuilder())
-	_, addrs, err := a.Accounts()
-	require.NoError(t, err)
+	addrs := addresses(a)
 
 	slot := "0x0000000000000000000000000000000000000000000000000000000000000001"
-	require.NoError(t, a.SetStorageAt(ctx, addrs[0], slot, common.HexToHash("0x2a").Hex()))
+	require.NoError(t, a.SetStorageAt(ctx, addrs[0], common.HexToHash(slot), common.HexToHash("0x2a")))
 	// Mine so the head block's state root includes the storage write.
 	require.NoError(t, a.MineBlock(ctx))
 
@@ -491,8 +523,8 @@ func TestWaitForBlock(t *testing.T) {
 	a := startAnvil(t, NewAnvilBuilder())
 
 	require.NoError(t, a.Mine(ctx, 3, 0))
-	require.NoError(t, a.WaitForBlock(3, time.Second))
-	require.ErrorIs(t, a.WaitForBlock(100, 200*time.Millisecond), context.DeadlineExceeded)
+	require.NoError(t, waitForBlock(t, a, 3, time.Second))
+	require.ErrorIs(t, waitForBlock(t, a, 100, 200*time.Millisecond), context.DeadlineExceeded)
 }
 
 func TestWaitForMemPoolEmpty(t *testing.T) {
@@ -517,10 +549,9 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 		ctx := t.Context()
 		a := startAnvil(t, NewAnvilBuilder())
 		require.NoError(t, a.SetAutomine(ctx, false))
-		_, addrs, err := a.Accounts()
-		require.NoError(t, err)
+		addrs := addresses(a)
 
-		_, err = sendTx(ctx, a, addrs[0], addrs[1], 1)
+		_, err := sendTx(ctx, a, addrs[0], addrs[1], 1)
 		require.NoError(t, err)
 
 		err = a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
@@ -535,8 +566,7 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 		ctx := t.Context()
 		a := startAnvil(t, NewAnvilBuilder())
 		require.NoError(t, a.SetAutomine(ctx, false))
-		_, addrs, err := a.Accounts()
-		require.NoError(t, err)
+		addrs := addresses(a)
 
 		send := func(nonce uint64) {
 			var hash common.Hash
@@ -551,7 +581,7 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 		// A nonce ahead of the account's next nonce leaves the transaction
 		// queued, not pending, so a pending-only count would see an empty pool.
 		send(5)
-		err = a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
+		err := a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		// Filling the nonce gap makes it mineable. (DropTransaction can't clear
@@ -565,15 +595,13 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 }
 
 // TestConcurrentCalls runs mixed calls from many goroutines so -race can see
-// the shared counters and client access.
+// the client access.
 func TestConcurrentCalls(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	a := startAnvil(t, NewAnvilBuilder())
-	_, addrs, err := a.Accounts()
-	require.NoError(t, err)
+	addrs := addresses(a)
 
-	before := a.Metrics()
 	deadline := time.Now().Add(300 * time.Millisecond)
 	errs := make([]error, 50)
 	var wg sync.WaitGroup
@@ -586,15 +614,12 @@ func TestConcurrentCalls(t *testing.T) {
 				case 1:
 					errs[i] = a.SetBalance(ctx, addrs[0], big.NewInt(int64(i+1)))
 				case 2:
-					_ = a.Metrics()
+					_ = a.URL()
 				}
 			}
 		})
 	}
 	wg.Wait()
 	require.NoError(t, errors.Join(errs...))
-
-	after := a.Metrics()
-	assert.Greater(t, after.RPCCalls, before.RPCCalls)
-	assert.Greater(t, after.BlocksMined, before.BlocksMined)
+	assert.Positive(t, head(t, a).Number.Sign(), "blocks should have been mined")
 }

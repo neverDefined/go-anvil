@@ -13,22 +13,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VerifyProof(stateRoot, proof)` — verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
 - `URL()` returns the node's HTTP JSON-RPC endpoint.
 - `ErrProcessExited`, returned by `Start()` when anvil exits before it is ready.
+- `WithArgs(...string)` passes any other flag to anvil.
 
 ### Changed
 
-- **Behavior change:** without `WithPort`, anvil now picks a free port instead of using 8545. Use `URL()` to find it, or `WithPort("8545")` to keep the old behavior.
+- **Behavior change:** without `WithPort`, anvil now picks a free port instead of using 8545. Use `URL()` to find it, or `WithPort(8545)` to keep the old behavior.
 - `Start()` waits for anvil's `Listening on` line instead of polling the RPC endpoint every 50ms.
 - `Close()` and `Stop()` are now the same call.
-- `Build()` rejects a non-numeric or out-of-range port with `ErrInvalidConfig`.
+- **Breaking:** builder options take real types: `WithPort(int)`, `WithChainID(uint64)`, `WithBlockTime(time.Duration)`, `WithForkBlockNumber(uint64)`, `WithGasLimit(uint64)`. Calling one twice keeps the last value instead of passing the flag twice.
+- `Build()` returns `ErrInvalidConfig` for an out-of-range port, a negative block time, a fork block without a fork URL, the `--silent`, `--quiet` and `-q` flags, which hide the output `Start()` waits for, and `--port` or `-p` in `WithArgs`.
+- **Breaking:** `SetCode` takes `[]byte`, and `SetStorageAt` takes a `common.Hash` slot and value.
+- **Breaking:** `DropTransaction` takes a `common.Hash` and also returns whether anvil dropped anything.
+- **Breaking:** `Snapshot` and `Revert` use a `SnapshotID` type (#63).
+- **Breaking:** `WaitForBlock(ctx, number)` replaces `WaitForBlock(number, timeout)`. Put a deadline on `ctx`. It now checks before its first 100ms tick.
+- **Breaking:** `Accounts()` returns all ten default accounts as `[]Account` and no longer returns an error (#62):
+
+  ```go
+  // before
+  keys, addrs, err := a.Accounts()
+  // after
+  accounts := a.Accounts()
+  key, addr := accounts[0].Key, accounts[0].Address
+  ```
+
+- **Breaking:** `WithLogger(*slog.Logger)` replaces `WithLogLevel`. Anvil's output is discarded by default; it used to go to zerolog's global logger. To see anvil's stdout, use a handler at `slog.LevelDebug`; stderr is logged at Warn. The zerolog dependency is gone.
+- `ErrStartupTimeout` errors include anvil's last stderr lines.
 - `Start()` takes one `evm_snapshot` as the `ResetState` baseline, so the first ID returned by `Snapshot()` is no longer `0x0`.
 - `ResetFork()` takes a new `ResetState` baseline, because anvil discards all snapshots on reset.
 - The library no longer logs errors it also returns, and `WaitForBlock` no longer logs at Debug on every poll. Errors from RPC methods start with the method name instead (`anvil: evm_mine: ...`).
 
 ### Removed
 
-- `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read: use `WithLogLevel`, and `WithPort` plus `URL()` for the endpoint.
+- `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read: use `WithLogger`, and `WithPort` plus `URL()` for the endpoint.
 - `ErrProcessNotFound` and `ErrRPCCallFailed`, which nothing returned.
 - `MemPoolEmpty(ctx, client)`, deprecated in 0.1.0. Use `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` (#61).
+- `Metrics()` and `AnvilMetrics`. `LastError` was never set, and the block count included failed calls but not automined or interval blocks.
+- `WithGasPrice`. It had no effect on anvil's default hardfork. Use `WithArgs("--gas-price", "...")` with a pre-London `--hardfork`.
+- `AnvilPrivateKey` and `AnvilPrivateKeys`. Use `Accounts()`; `hex.EncodeToString(crypto.FromECDSA(account.Key))` gives the hex form.
 
 ### Fixed
 

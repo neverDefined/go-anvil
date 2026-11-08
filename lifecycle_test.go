@@ -1,6 +1,9 @@
 package anvil
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"net"
 	"net/url"
 	"os/exec"
@@ -8,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +27,6 @@ func TestLifecycle(t *testing.T) {
 		a := startAnvil(t, NewAnvilBuilder())
 		b := startAnvil(t, NewAnvilBuilder())
 		require.NotEqual(t, a.URL(), b.URL())
-		assert.Positive(t, a.Metrics().StartupTime)
 
 		require.NoError(t, a.MineBlock(ctx))
 		blockA, err := a.Client().BlockNumber(ctx)
@@ -41,8 +42,10 @@ func TestLifecycle(t *testing.T) {
 		owner := startAnvil(t, NewAnvilBuilder())
 		u, err := url.Parse(owner.URL())
 		require.NoError(t, err)
+		port, err := strconv.Atoi(u.Port())
+		require.NoError(t, err)
 
-		a, err := NewAnvilBuilder().WithLogLevel(zerolog.Disabled).WithPort(u.Port()).Build()
+		a, err := NewAnvilBuilder().WithPort(port).Build()
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = a.Close() })
 
@@ -55,8 +58,7 @@ func TestLifecycle(t *testing.T) {
 	t.Run("invalid flag fails fast with anvil's own error", func(t *testing.T) {
 		t.Parallel()
 		a, err := NewAnvilBuilder().
-			WithLogLevel(zerolog.Disabled).
-			WithBlockTime("not-a-number").
+			WithArgs("--block-time", "not-a-number").
 			WithStartupTimeout(30 * time.Second).
 			Build()
 		require.NoError(t, err)
@@ -75,11 +77,14 @@ func TestLifecycle(t *testing.T) {
 	t.Run("calls outside the started lifetime return ErrNotStarted", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a, err := NewAnvilBuilder().WithLogLevel(zerolog.Disabled).Build()
+		a, err := NewAnvilBuilder().Build()
 		require.NoError(t, err)
 
 		require.ErrorIs(t, a.MineBlock(ctx), ErrNotStarted)
-		require.ErrorIs(t, a.WaitForBlock(1, time.Millisecond), ErrNotStarted)
+		require.ErrorIs(t, a.WaitForBlock(ctx, 1), ErrNotStarted)
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.ErrorIs(t, a.WaitForBlock(canceled, 1), ErrNotStarted, "a finished ctx must not mask it")
 		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx, time.Millisecond), ErrNotStarted)
 
 		require.NoError(t, a.Start())
@@ -115,14 +120,29 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("startup timeout returns ErrStartupTimeout", func(t *testing.T) {
 		t.Parallel()
-		a, err := NewAnvilBuilder().
-			WithLogLevel(zerolog.Disabled).
-			WithStartupTimeout(time.Millisecond).
-			Build()
+		a, err := NewAnvilBuilder().WithStartupTimeout(time.Millisecond).Build()
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = a.Close() })
 
 		require.ErrorIs(t, a.Start(), ErrStartupTimeout)
+	})
+
+	t.Run("WithLogger receives anvil's output", func(t *testing.T) {
+		t.Parallel()
+		var out bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		a := startAnvil(t, NewAnvilBuilder().WithLogger(logger))
+		require.NoError(t, a.Close()) // the process has been reaped, so out is final
+		assert.Contains(t, out.String(), "Listening on")
+		assert.Contains(t, out.String(), "stream=stdout")
+
+		out.Reset()
+		a, err := NewAnvilBuilder().WithLogger(logger).WithArgs("--no-such-flag").Build()
+		require.NoError(t, err)
+		require.ErrorIs(t, a.Start(), ErrProcessExited)
+		assert.Contains(t, out.String(), "level=WARN")
+		assert.Contains(t, out.String(), "stream=stderr")
 	})
 }
 
@@ -131,11 +151,11 @@ func TestLifecycle(t *testing.T) {
 func TestFixedPort(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	port := l.Addr().(*net.TCPAddr).Port
 	require.NoError(t, l.Close())
 
 	a := startAnvil(t, NewAnvilBuilder().WithPort(port))
-	assert.Equal(t, "http://127.0.0.1:"+port, a.URL())
+	assert.Equal(t, "http://127.0.0.1:"+strconv.Itoa(port), a.URL())
 	_, err = a.Client().BlockNumber(t.Context())
 	require.NoError(t, err)
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,32 +44,26 @@ func TestAnvilBuilder_validate(t *testing.T) {
 		builder *AnvilBuilder
 		wantErr bool
 	}{
-		{
-			name:    "default builder is valid (anvil picks the port)",
-			builder: NewAnvilBuilder(),
-			wantErr: false,
-		},
-		{
-			name:    "numeric port is valid",
-			builder: NewAnvilBuilder().WithPort("8545"),
-			wantErr: false,
-		},
-		{
-			name:    "non-numeric port fails",
-			builder: NewAnvilBuilder().WithPort("http"),
-			wantErr: true,
-		},
-		{
-			name:    "out-of-range port fails",
-			builder: NewAnvilBuilder().WithPort("70000"),
-			wantErr: true,
-		},
+		{"default builder is valid (anvil picks the port)", NewAnvilBuilder(), false},
+		{"fixed port is valid", NewAnvilBuilder().WithPort(8545), false},
+		{"negative port fails", NewAnvilBuilder().WithPort(-1), true},
+		{"out-of-range port fails", NewAnvilBuilder().WithPort(70000), true},
+		{"negative block time fails", NewAnvilBuilder().WithBlockTime(-time.Second), true},
+		{"fork block without a fork URL fails", NewAnvilBuilder().WithForkBlockNumber(5), true},
+		{"fork block with a fork URL is valid", NewAnvilBuilder().WithFork("https://example.org").WithForkBlockNumber(5), false},
+		{"other extra flags are valid", NewAnvilBuilder().WithArgs("--hardfork", "cancun"), false},
+		{"--silent would hide the listening line", NewAnvilBuilder().WithArgs("--silent"), true},
+		{"--quiet would hide the listening line", NewAnvilBuilder().WithArgs("--quiet"), true},
+		{"-q would hide the listening line", NewAnvilBuilder().WithArgs("-q"), true},
+		{"--port conflicts with WithPort", NewAnvilBuilder().WithArgs("--port", "9000"), true},
+		{"--port=N conflicts with WithPort", NewAnvilBuilder().WithArgs("--port=9000"), true},
+		{"-p conflicts with WithPort", NewAnvilBuilder().WithArgs("-p", "9000"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.builder.validate()
+			_, err := tc.builder.Build()
 			if tc.wantErr {
-				require.Error(t, err)
+				require.ErrorIs(t, err, ErrInvalidConfig)
 			} else {
 				require.NoError(t, err)
 			}
@@ -83,24 +77,72 @@ func TestAnvilBuilder_args(t *testing.T) {
 	assert.Equal(t, []string{"--port", "0"}, a.args, "anvil picks the port by default")
 
 	a, err = NewAnvilBuilder().
-		WithBlockTime("2").
-		WithChainID("1337").
-		WithGasLimit("12000000").
-		WithGasPrice("20000000000").
+		WithBlockTime(1500*time.Millisecond).
+		WithChainID(1337).
+		WithGasLimit(12_000_000).
 		WithFork("https://example.org").
-		WithForkBlockNumber("5").
-		WithPort("9000").
+		WithForkBlockNumber(0).
+		WithPort(9000).
+		WithArgs("--hardfork", "cancun").
 		Build()
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"--block-time", "2",
+		"--port", "9000",
+		"--block-time", "1.5",
 		"--chain-id", "1337",
 		"--gas-limit", "12000000",
-		"--gas-price", "20000000000",
 		"--fork-url", "https://example.org",
-		"--fork-block-number", "5",
-		"--port", "9000",
+		"--fork-block-number", "0",
+		"--hardfork", "cancun",
 	}, a.args)
+}
+
+func TestAnvilBuilder_settingTwiceKeepsTheLastValue(t *testing.T) {
+	a, err := NewAnvilBuilder().WithChainID(1).WithChainID(2).Build()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--port", "0", "--chain-id", "2"}, a.args)
+}
+
+func TestAnvilBuilder_explicitZeroIsPassed(t *testing.T) {
+	a, err := NewAnvilBuilder().WithChainID(0).WithGasLimit(0).Build()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--port", "0", "--chain-id", "0", "--gas-limit", "0"}, a.args)
+}
+
+func TestAnvilBuilder_WithArgsAccumulates(t *testing.T) {
+	a, err := NewAnvilBuilder().WithArgs("--hardfork", "cancun").WithArgs("--no-mining").Build()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--port", "0", "--hardfork", "cancun", "--no-mining"}, a.args)
+}
+
+// TestStartupTimeoutIncludesStderr uses a stand-in binary that writes to stderr
+// and never prints the listening line. It can't run in parallel: it sets PATH.
+func TestStartupTimeoutIncludesStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the anvil binary")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho boom >&2\nexec sleep 30\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "anvil"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	a, err := NewAnvilBuilder().WithStartupTimeout(500 * time.Millisecond).Build()
+	require.NoError(t, err)
+
+	err = a.Start()
+	require.ErrorIs(t, err, ErrStartupTimeout)
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestAccounts_defaults(t *testing.T) {
+	a := &Anvil{}
+	accounts := a.Accounts()
+	require.Len(t, accounts, 10)
+	assert.Equal(t, common.HexToAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"), accounts[0].Address)
+	assert.Equal(t, accounts[0].Address, crypto.PubkeyToAddress(accounts[0].Key.PublicKey))
+
+	accounts[0] = Account{}
+	assert.NotEqual(t, Account{}, a.Accounts()[0], "callers get their own copy")
 }
 
 func TestAnvilBuilder_WithStartupTimeout(t *testing.T) {
@@ -302,7 +344,7 @@ func newTestAnvil(t *testing.T, server *httptest.Server) *Anvil {
 		cancel:    cancel,
 		state:     stateRunning,
 		rpcClient: rpcClient,
-		logger:    zerolog.New(io.Discard),
+		logger:    slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -326,6 +368,7 @@ var cannedResults = map[string]any{
 	"anvil_autoImpersonateAccount":   nil,
 	"anvil_reset":                    nil,
 	"txpool_status":                  map[string]any{"pending": "0x0", "queued": "0x0"},
+	"eth_blockNumber":                "0x5",
 	"eth_getProof": map[string]any{
 		"address":      "0x1234567890123456789012345678901234567890",
 		"accountProof": []string{},
@@ -361,10 +404,11 @@ func TestRPCWrappers(t *testing.T) {
 			calls("anvil_setBalance", `[`+a+`,"100"]`)},
 		{"SetNonce", func(ctx context.Context, x *Anvil) error { return x.SetNonce(ctx, addr, 42) },
 			calls("anvil_setNonce", `[`+a+`,"0x2a"]`)},
-		{"SetCode", func(ctx context.Context, x *Anvil) error { return x.SetCode(ctx, addr, "0x00") },
-			calls("anvil_setCode", `[`+a+`,"0x00"]`)},
-		{"SetStorageAt", func(ctx context.Context, x *Anvil) error { return x.SetStorageAt(ctx, addr, "0x0", "0x1") },
-			calls("anvil_setStorageAt", `[`+a+`,"0x0","0x1"]`)},
+		{"SetCode", func(ctx context.Context, x *Anvil) error { return x.SetCode(ctx, addr, []byte{0x60, 0x80}) },
+			calls("anvil_setCode", `[`+a+`,"0x6080"]`)},
+		{"SetStorageAt", func(ctx context.Context, x *Anvil) error {
+			return x.SetStorageAt(ctx, addr, common.HexToHash("0x1"), common.HexToHash("0x2a"))
+		}, calls("anvil_setStorageAt", `[`+a+`,"`+common.HexToHash("0x1").Hex()+`","`+common.HexToHash("0x2a").Hex()+`"]`)},
 		{"Impersonate", func(ctx context.Context, x *Anvil) error { return x.Impersonate(ctx, addr) },
 			calls("anvil_impersonateAccount", `[`+a+`]`)},
 		{"StopImpersonating", func(ctx context.Context, x *Anvil) error { return x.StopImpersonating(ctx, addr) },
@@ -375,8 +419,10 @@ func TestRPCWrappers(t *testing.T) {
 			calls("evm_setAutomine", `[false]`)},
 		{"SetIntervalMining", func(ctx context.Context, x *Anvil) error { return x.SetIntervalMining(ctx, 5) },
 			calls("evm_setIntervalMining", `[5]`)},
-		{"DropTransaction", func(ctx context.Context, x *Anvil) error { return x.DropTransaction(ctx, "0xdeadbeef") },
-			calls("anvil_dropTransaction", `["0xdeadbeef"]`)},
+		{"DropTransaction", func(ctx context.Context, x *Anvil) error {
+			_, err := x.DropTransaction(ctx, common.HexToHash("0xbeef"))
+			return err
+		}, calls("anvil_dropTransaction", `["`+common.HexToHash("0xbeef").Hex()+`"]`)},
 		{"Snapshot", func(ctx context.Context, x *Anvil) error { _, err := x.Snapshot(ctx); return err },
 			calls("evm_snapshot", `[]`)},
 		{"Revert", func(ctx context.Context, x *Anvil) error { _, err := x.Revert(ctx, "0xabc"); return err },
@@ -392,6 +438,8 @@ func TestRPCWrappers(t *testing.T) {
 			calls("evm_revert", `["0x1"]`, "evm_snapshot", `[]`)},
 		{"WaitForMemPoolEmpty", func(ctx context.Context, x *Anvil) error { return x.WaitForMemPoolEmpty(ctx, time.Second) },
 			calls("txpool_status", `[]`)},
+		{"WaitForBlock", func(ctx context.Context, x *Anvil) error { return x.WaitForBlock(ctx, 5) },
+			calls("eth_blockNumber", `[]`)},
 		// anvil drops every snapshot on reset, so ResetFork takes a new baseline.
 		{"ResetFork", func(ctx context.Context, x *Anvil) error { return x.ResetFork(ctx, "https://example.org", 0) },
 			calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org"}}]`, "evm_snapshot", `[]`)},
@@ -430,7 +478,7 @@ func TestRPCResults(t *testing.T) {
 
 	id, err := a.Snapshot(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "0xabc", id)
+	assert.Equal(t, SnapshotID("0xabc"), id)
 
 	ok, err := a.Revert(ctx, id)
 	require.NoError(t, err)
@@ -441,7 +489,21 @@ func TestRPCResults(t *testing.T) {
 	assert.Equal(t, common.HexToAddress("0x1234567890123456789012345678901234567890"), proof.Address)
 
 	require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
-	assert.Equal(t, "0xabc", a.baseline)
+	assert.Equal(t, SnapshotID("0xabc"), a.baseline)
+}
+
+func TestDropTransaction_reportsWhetherAnythingWasDropped(t *testing.T) {
+	hash := common.HexToHash("0xbeef")
+
+	a := newTestAnvil(t, newRPCServer(t, map[string]any{"anvil_dropTransaction": hash}).server)
+	dropped, err := a.DropTransaction(t.Context(), hash)
+	require.NoError(t, err)
+	assert.True(t, dropped)
+
+	a = newTestAnvil(t, newRPCServer(t, map[string]any{"anvil_dropTransaction": nil}).server)
+	dropped, err = a.DropTransaction(t.Context(), hash)
+	require.NoError(t, err)
+	assert.False(t, dropped)
 }
 
 func TestRPCMethods_serverError(t *testing.T) {
@@ -478,21 +540,6 @@ func TestRPCMethods_ctxCancelled(t *testing.T) {
 	defer cancel()
 
 	require.ErrorIs(t, a.MineBlock(ctx), context.DeadlineExceeded)
-}
-
-func TestRPCMetricsIncrement(t *testing.T) {
-	rs := newRPCServer(t, cannedResults)
-	a := newTestAnvil(t, rs.server)
-	ctx := context.Background()
-
-	require.NoError(t, a.MineBlock(ctx))
-	require.NoError(t, a.Mine(ctx, 5, 0))
-	_, err := a.Snapshot(ctx)
-	require.NoError(t, err)
-
-	m := a.Metrics()
-	assert.Equal(t, uint64(6), m.BlocksMined)
-	assert.Equal(t, int64(3), m.RPCCalls)
 }
 
 // -----------------------------------------------------------------------------
