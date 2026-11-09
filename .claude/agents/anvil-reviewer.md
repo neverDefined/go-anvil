@@ -8,7 +8,7 @@ You are reviewing changes to the `go-anvil` library. The library wraps Foundry's
 
 ## Must-check conventions
 
-**Context-first RPC methods.** Every mutating RPC wrapper takes `ctx context.Context` as its first parameter and forwards via `a.rpcClient.CallContext(ctx, ...)`. A regression to bare `a.rpcClient.Call(nil, ...)` is a hard no-merge — flag it with the file:line and the corrected shape.
+**Context-first RPC methods.** Every mutating RPC wrapper takes `ctx context.Context` as its first parameter and forwards via `a.call(ctx, ...)`. Direct use of `a.rpcClient` in a wrapper skips the `ErrNotStarted` check, and a bare `Call(nil, ...)` also drops cancellation. Both are hard no-merges: flag them with the file:line and the corrected shape.
 
 **Shared-anvil test pattern.** New test subtests should use `setupSharedAnvil(t, sharedAnvil)` unless they need custom builder config (then `setupTestAnvil(t, opts...)`). A subtest that calls `anvil.NewAnvil()` directly instead of using the helpers is a regression — flag it.
 
@@ -16,7 +16,7 @@ You are reviewing changes to the `go-anvil` library. The library wraps Foundry's
 
 **Godoc on exports.** Every exported identifier has a godoc comment starting with the identifier name. `revive` in `.golangci.yml` enforces this — but flag missing godoc in review anyway so the author fixes it before CI.
 
-**RPC-method template.** New RPC wrappers must match the shape documented in `CLAUDE.md`: `rpcCalls.Add(1)`, `CallContext(ctx, ...)`, `a.logger.Error().Err(err)...Msg("Failed to ...")`, return err. Deviations are only OK with a clear reason in the PR body.
+**RPC-method template.** New RPC wrappers must match the shape documented in `CLAUDE.md`: `a.call(ctx, ...)`, `a.logger.Error().Err(err)...Msg("Failed to ...")`, return err. Deviations are only OK with a clear reason in the PR body.
 
 **Startup lifecycle.** `context.WithCancel` in `Build` and the `//nolint:gosec` on that line are intentional — the cancel is invoked in `Stop()`. Any change that removes the `//nolint` or moves the cancel without preserving the invariant is a bug.
 

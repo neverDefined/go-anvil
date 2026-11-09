@@ -78,7 +78,7 @@ anvil, err := anvil.NewAnvilBuilder().
     WithBlockTime("1").              // Block time in seconds
     WithChainID("1337").              // Custom chain ID
     WithGasLimit("12000000").         // Block gas limit
-    WithPort("8545").                 // RPC port
+    WithPort("8545").                 // Fixed RPC port (default: a free port)
     WithLogLevel(zerolog.InfoLevel).  // Logging level
     WithFork("https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY").
     WithForkBlockNumber("15000000").  // Fork from specific block
@@ -91,7 +91,7 @@ anvil, err := anvil.NewAnvilBuilder().
 - `WithChainID(id)` - Set the chain ID
 - `WithGasLimit(limit)` - Set the block gas limit
 - `WithGasPrice(price)` - Set the gas price
-- `WithPort(port)` - Set the RPC port
+- `WithPort(port)` - Use a fixed RPC port. By default anvil picks a free port, so parallel tests never collide; `URL()` returns the endpoint.
 - `WithFork(url)` - Fork from a remote network
 - `WithForkBlockNumber(number)` - Fork from a specific block
 - `WithLogLevel(level)` - Set logging verbosity
