@@ -35,29 +35,26 @@ If arguments are missing, ask the user for:
 
 4. **Methods that return a result** (like `Snapshot` returning a snapshot ID, `Revert` returning a bool): adjust signature to `(ctx, ...) (T, error)`, bind the result to a local variable, and pass `&result` to `a.call`.
 
-5. Add a minimal subtest in `anvil_test.go` under `TestAnvil` following the shared-anvil pattern:
+5. Add a top-level integration test in `anvil_test.go` on its own instance. Assert what the call changed on the chain, not just that it returned nil:
 
    ```go
-   t.Run("Test <MethodName>", func(t *testing.T) {
+   func Test<MethodName>(t *testing.T) {
+       t.Parallel()
        ctx := t.Context()
-       anvil := setupSharedAnvil(t, sharedAnvil)
+       a := startAnvil(t, NewAnvilBuilder())
 
-       err := anvil.<MethodName>(ctx, <test-args>)
-       require.NoError(t, err)
-   })
+       require.NoError(t, a.<MethodName>(ctx, <test-args>))
+       // read the state back through a.Client() and assert on it
+   }
    ```
 
-   If the method returns data, add a `require.NoError(t, err)` plus at least one assertion on the returned value.
-
-6. Also add a subtest in `anvil_unit_test.go` under `TestRPCMethods_sendCorrectMethod`:
-   - Add `"<rpc_method_name>": <result-or-nil>,` to the `results` map at the top of the function.
-   - Add a `t.Run("<MethodName>", func(t *testing.T) { ... })` block that calls the method and asserts `rs.lastCall().Method` matches.
+6. In `anvil_unit_test.go`, add `"<rpc_method_name>": <result-or-nil>,` to `cannedResults` and a row to the `TestRPCWrappers` table with the exact params JSON the method sends.
 
 7. Run the checks before handing back:
    ```
    go build ./...
    golangci-lint run ./...
-   go test -race -run 'TestRPCMethods_sendCorrectMethod/<MethodName>' ./...
+   go test -race -run 'Test<MethodName>|TestRPCWrappers' ./...
    ```
 
 ## Out of scope

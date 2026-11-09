@@ -10,7 +10,7 @@ You are reviewing changes to the `go-anvil` library. The library wraps Foundry's
 
 **Context-first RPC methods.** Every mutating RPC wrapper takes `ctx context.Context` as its first parameter and forwards via `a.call(ctx, ...)`. Direct use of `a.rpcClient` in a wrapper skips the `ErrNotStarted` check, and a bare `Call(nil, ...)` also drops cancellation. Both are hard no-merges: flag them with the file:line and the corrected shape.
 
-**Shared-anvil test pattern.** New test subtests should use `setupSharedAnvil(t, sharedAnvil)` unless they need custom builder config (then `setupTestAnvil(t, opts...)`). A subtest that calls `anvil.NewAnvil()` directly instead of using the helpers is a regression — flag it.
+**Test pattern.** Integration tests start their own instance with `startAnvil(t, builder)` and call `t.Parallel()`. Flag a `time.Sleep`, a test that only checks a call returned nil when the effect can be read back, and a new wrapper without a `TestRPCWrappers` row.
 
 **Error wrapping.** Errors wrap with `fmt.Errorf("...: %w", err)`. If you see `%v` for an error, or a wholly new ad-hoc message that discards an underlying error, flag it. Prefer the sentinel errors at the top of `anvil.go` when they apply.
 

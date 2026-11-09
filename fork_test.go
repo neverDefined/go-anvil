@@ -10,7 +10,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,16 +25,10 @@ func requireForkURL(t *testing.T) string {
 
 // TestForkLatest forks from the upstream chain head and asserts we can read a block.
 func TestForkLatest(t *testing.T) {
+	t.Parallel()
 	url := requireForkURL(t)
 
-	anvil, err := NewAnvilBuilder().
-		WithLogLevel(zerolog.Disabled).
-		WithPort(getTestPort()).
-		WithFork(url).
-		Build()
-	require.NoError(t, err)
-	require.NoError(t, anvil.Start())
-	t.Cleanup(func() { _ = anvil.Close() })
+	anvil := startAnvil(t, NewAnvilBuilder().WithFork(url))
 
 	ctx := t.Context()
 	block, err := anvil.Client().BlockNumber(ctx)
@@ -49,19 +42,12 @@ func TestForkLatest(t *testing.T) {
 
 // TestForkAtBlock forks from a specific block and asserts we can read state from that block.
 func TestForkAtBlock(t *testing.T) {
+	t.Parallel()
 	url := requireForkURL(t)
 
 	const forkBlock = "18000000" // a mainnet block known to have state
 
-	anvil, err := NewAnvilBuilder().
-		WithLogLevel(zerolog.Disabled).
-		WithPort(getTestPort()).
-		WithFork(url).
-		WithForkBlockNumber(forkBlock).
-		Build()
-	require.NoError(t, err)
-	require.NoError(t, anvil.Start())
-	t.Cleanup(func() { _ = anvil.Close() })
+	anvil := startAnvil(t, NewAnvilBuilder().WithFork(url).WithForkBlockNumber(forkBlock))
 
 	ctx := t.Context()
 	block, err := anvil.Client().BlockNumber(ctx)

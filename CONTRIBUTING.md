@@ -5,7 +5,7 @@ Thanks for your interest. This is a solo-maintained library, so PRs and issues a
 ## Prerequisites
 
 - Go 1.25 or later (matches `go.mod`)
-- [Foundry](https://book.getfoundry.sh/) — tests spawn real `anvil` processes
+- [Foundry](https://book.getfoundry.sh/) — the integration tests spawn real `anvil` processes
 - `make`
 
 Install the Go toolchain helpers once:
@@ -30,17 +30,11 @@ Individual targets if you want to run them in isolation:
 make fmt          # gofmt / gofumpt
 make vet          # go vet
 make lint         # golangci-lint run
-make test         # go test -race ./...
+make test         # go test -race -shuffle=on ./...
 make test-coverage # HTML coverage report
 ```
 
-Tests require `anvil` on `PATH`. If you don't have Foundry installed, `make check-foundry` will tell you so.
-
-To run only the pure-Go unit tests (no live anvil, no Foundry required):
-
-```
-go test -run '^Test(AnvilBuilder|ResolveAnvilPath|SentinelErrors|RPC)' ./...
-```
+The integration tests start real anvil instances. Without Foundry they skip, so `go test ./...` still runs the unit tests; `make check-foundry` tells you whether anvil is installed. When `CI` is set, a missing anvil fails the run instead of skipping.
 
 Fork-mode tests are gated behind a `fork` build tag and require `ETH_RPC_URL`:
 

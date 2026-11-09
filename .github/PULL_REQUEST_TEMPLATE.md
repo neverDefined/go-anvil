@@ -8,7 +8,7 @@ Closes #
 
 ## Test plan
 
-<!-- Check off what you ran. `go test -race ./...` requires anvil on PATH. -->
+<!-- Check off what you ran. Without anvil on PATH the integration tests skip, so run this with Foundry installed. -->
 - [ ] `go build ./...` clean
 - [ ] `go vet ./...` clean
 - [ ] `golangci-lint run` clean

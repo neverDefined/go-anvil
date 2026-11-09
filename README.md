@@ -193,27 +193,24 @@ fmt.Printf("RPC calls: %d\n", metrics.RPCCalls)
 
 ## Testing
 
-The library includes comprehensive tests. Use the shared instance pattern for faster test execution:
+Anvil picks its own port and starts in about 50 ms, so give each test its own instance and run the tests in parallel:
 
 ```go
 func TestMyContract(t *testing.T) {
-    // Create shared instance once
-    anvil, _ := anvil.NewAnvil()
-    anvil.Start()
-    defer anvil.Close()
-    
-    t.Run("test case 1", func(t *testing.T) {
-        // Reset state before each test
-        anvil.ResetState(t.Context())
-        // ... your test
-    })
-    
-    t.Run("test case 2", func(t *testing.T) {
-        anvil.ResetState(t.Context())
-        // ... your test
-    })
+    t.Parallel()
+
+    node, err := anvil.NewAnvil()
+    require.NoError(t, err)
+    require.NoError(t, node.Start())
+    t.Cleanup(func() { _ = node.Close() })
+
+    // ... your test
 }
 ```
+
+When setup is expensive (a fork, deployed contracts), share one instance across sequential subtests and call `ResetState(ctx)` between them to return to the state right after `Start`.
+
+This repo's own tests run with `-shuffle=on`. A failing run prints its seed; `go test -shuffle=<seed> ./...` repeats that order.
 
 ## API Documentation
 
