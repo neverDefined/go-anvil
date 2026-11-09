@@ -149,13 +149,15 @@ func parseStorageKey(key string) ([]byte, error) {
 	return n.FillBytes(make([]byte, 32)), nil
 }
 
-// WaitForMemPoolEmpty waits for the memory pool to be empty (no pending transactions).
-// It polls every 100ms until the pool is empty, ctx is canceled, or the timeout expires —
+// WaitForMemPoolEmpty waits until the transaction pool holds no pending and no
+// queued transactions (txpool_status). Queued transactions are ones that cannot
+// be mined yet, for example because of a nonce gap. It checks immediately, then
+// every 100ms, until the pool is empty, ctx is canceled, or the timeout expires —
 // whichever comes first. A zero or negative timeout means "use ctx's deadline only."
 // Returns an error if the timeout is exceeded, ctx is canceled, or the query fails.
 func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) error {
-	_, client, err := a.clients()
-	if err != nil {
+	// Check the lifecycle first so ErrNotStarted isn't masked by an expired timeout.
+	if _, _, err := a.clients(); err != nil {
 		return err
 	}
 
@@ -169,17 +171,24 @@ func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) 
 	defer ticker.Stop()
 
 	for {
+		var status struct {
+			Pending hexutil.Uint64 `json:"pending"`
+			Queued  hexutil.Uint64 `json:"queued"`
+		}
+		if err := a.call(ctx, &status, "txpool_status"); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("waiting for empty mempool: %w", ctx.Err())
+			}
+			return fmt.Errorf("query txpool status: %w", err)
+		}
+		if status.Pending == 0 && status.Queued == 0 {
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for empty mempool: %w", ctx.Err())
 		case <-ticker.C:
-			pending, err := client.PendingTransactionCount(ctx)
-			if err != nil {
-				return fmt.Errorf("query pending transaction count: %w", err)
-			}
-			if pending == 0 {
-				return nil
-			}
 		}
 	}
 }

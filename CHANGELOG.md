@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Close()` and `Stop()` are now the same call.
 - `Build()` rejects a non-numeric or out-of-range port with `ErrInvalidConfig`.
 - `DefaultConfig.DefaultRPCURL` no longer has any effect; the endpoint comes from the port anvil binds.
+- `Start()` takes one `evm_snapshot` as the `ResetState` baseline, so the first ID returned by `Snapshot()` is no longer `0x0`.
+- `ResetFork()` takes a new `ResetState` baseline, because anvil discards all snapshots on reset.
 
 ### Fixed
 
@@ -28,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Start()` returns as soon as anvil exits during startup (for example, on an invalid flag), with anvil's stderr in the error, instead of waiting for the full startup timeout.
 - RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. Instances are single-use, so this also applies after a failed `Start()`. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
 - `Close()` no longer sleeps for 1 second after the process has exited (#80).
+- `Mine(ctx, n, x)` documented `x` as a timestamp, but anvil treats it as the number of seconds between blocks, so passing a Unix time moved the chain decades ahead. The parameter is now named `interval` and the README shows `SetNextBlockTimestamp` + `MineBlock` for an absolute time.
+- `ResetState()` returns to the state right after `Start()`. Its first call used to snapshot whatever state existed at that moment. A failed snapshot no longer breaks later resets for good, and concurrent calls are serialized instead of consuming the same snapshot (#79).
+- `WaitForMemPoolEmpty()` counts queued transactions (via `txpool_status`), not just the pending block, and checks before its first 100ms tick.
 
 ### Changed
 

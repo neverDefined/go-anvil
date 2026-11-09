@@ -139,10 +139,15 @@ type Anvil struct {
 	rpcClient   *rpc.Client
 	startupTime time.Duration
 
-	blocksMined      atomic.Uint64
-	rpcCalls         atomic.Int64
-	initialSnapshot  string
-	snapshotInitOnce sync.Once
+	blocksMined atomic.Uint64
+	rpcCalls    atomic.Int64
+
+	// baseline is the snapshot ResetState reverts to: the state right after
+	// Start, or after the last ResetFork. Empty if a reset failed partway.
+	// Start sets it under mu before the instance is running; after that it is
+	// guarded by baselineMu.
+	baselineMu sync.Mutex
+	baseline   string
 }
 
 // NewAnvil creates a new Anvil instance with default configuration.
@@ -224,7 +229,15 @@ func (a *Anvil) Start() error {
 	ctx, cancel := context.WithTimeout(a.context, a.startupTimeout)
 	defer cancel()
 
-	if err := a.awaitReady(ctx, listening, exited); err != nil {
+	err = a.awaitReady(ctx, listening, exited)
+	if err == nil {
+		// Record the freshly started state so ResetState can return to it.
+		err = a.rpcClient.CallContext(ctx, &a.baseline, "evm_snapshot")
+		if err != nil {
+			err = fmt.Errorf("take baseline snapshot: %w", err)
+		}
+	}
+	if err != nil {
 		if errors.Is(err, ErrProcessExited) {
 			// exited is closed, so waitErr and the stderr tail are final.
 			if waitErr != nil {
@@ -644,16 +657,19 @@ func toBlockNumArg(number *big.Int) string {
 	return rpc.BlockNumber(number.Int64()).String()
 }
 
-// Mine mines multiple blocks at once.
-// The numBlocks parameter specifies how many blocks to mine. If timestamp is 0, blocks use incremental timestamps.
-// Otherwise the first block uses the given timestamp and subsequent blocks increment from there.
+// Mine mines numBlocks blocks at once.
+// interval is the number of seconds between block timestamps: the first block is
+// interval seconds after the node's current time and each later block interval
+// seconds after the one before it. With 0, anvil uses its normal timestamps.
+// It is not an absolute time; to mine at a specific timestamp, call
+// SetNextBlockTimestamp and then MineBlock.
 // Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, timestamp uint64) error {
+func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) error {
 	a.blocksMined.Add(numBlocks)
 
 	var err error
-	if timestamp != 0 {
-		err = a.call(ctx, nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", timestamp))
+	if interval != 0 {
+		err = a.call(ctx, nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", interval))
 	} else {
 		err = a.call(ctx, nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks))
 	}
@@ -709,6 +725,8 @@ func (a *Anvil) AutoImpersonate(ctx context.Context, enabled bool) error {
 
 // ResetFork resets the fork to a fresh state, optionally at a new block number.
 // If blockNumber is 0, resets to the original fork block or latest block.
+// anvil discards every snapshot on reset, so afterwards ResetState returns to
+// the freshly reset state rather than the state after Start.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) ResetFork(ctx context.Context, forkURL string, blockNumber uint64) error {
 	var err error
@@ -729,8 +747,12 @@ func (a *Anvil) ResetFork(ctx context.Context, forkURL string, blockNumber uint6
 
 	if err != nil {
 		a.logger.Error().Err(err).Str("forkURL", forkURL).Msg("Failed to reset fork")
+		return err
 	}
-	return err
+
+	a.baselineMu.Lock()
+	defer a.baselineMu.Unlock()
+	return a.retakeBaselineLocked(ctx)
 }
 
 // Close stops the anvil process and closes the RPC clients. It is the same as
@@ -796,44 +818,50 @@ func (a *Anvil) Metrics() AnvilMetrics {
 	}
 }
 
-// ResetState resets the Anvil blockchain state to its initial values.
-// On the first call, it takes a snapshot of the initial state.
-// On subsequent calls, it reverts to that snapshot and takes a new one.
-// This is much faster than restarting the process.
+// ResetState reverts the chain to the state it had right after Start (or after
+// the last ResetFork), discarding every block, transaction and state change since.
+// It uses evm_snapshot/evm_revert, which is much faster than restarting the process.
+// Node settings that are not chain state, such as automine or impersonation,
+// are not reset.
+//
+// Concurrent calls are serialized. Resetting does not isolate tests that run in
+// parallel against the same instance; give those their own instances.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) ResetState(ctx context.Context) error {
-	var initErr error
-
-	// Take initial snapshot on first call
-	a.snapshotInitOnce.Do(func() {
-		a.initialSnapshot, initErr = a.Snapshot(ctx)
-		if initErr != nil {
-			a.logger.Error().Err(initErr).Msg("Failed to take initial snapshot")
-		}
-	})
-
-	if initErr != nil {
-		return initErr
-	}
-
-	// Revert to initial snapshot
-	success, err := a.Revert(ctx, a.initialSnapshot)
-	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to revert to initial snapshot")
+	// Checking the state first also orders this read of baseline after Start's write.
+	if _, _, err := a.clients(); err != nil {
 		return err
 	}
 
-	if !success {
-		return fmt.Errorf("failed to revert to initial snapshot")
+	a.baselineMu.Lock()
+	defer a.baselineMu.Unlock()
+
+	if a.baseline == "" {
+		return errors.New("anvil: reset state: no baseline snapshot (an earlier reset failed partway)")
 	}
 
-	// Take a new snapshot for next reset
-	a.initialSnapshot, err = a.Snapshot(ctx)
+	ok, err := a.Revert(ctx, a.baseline)
 	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to take new snapshot after reset")
-		return err
+		return fmt.Errorf("reset state: %w", err)
+	}
+	if !ok {
+		a.baseline = ""
+		return errors.New("anvil: reset state: the baseline snapshot no longer exists (was it reverted directly?)")
 	}
 
+	// evm_revert consumes the snapshot, so take a fresh one of the same state.
+	return a.retakeBaselineLocked(ctx)
+}
+
+// retakeBaselineLocked snapshots the current state as the new ResetState
+// baseline. a.baselineMu must be held.
+func (a *Anvil) retakeBaselineLocked(ctx context.Context) error {
+	id, err := a.Snapshot(ctx)
+	if err != nil {
+		a.baseline = ""
+		return fmt.Errorf("take baseline snapshot: %w", err)
+	}
+	a.baseline = id
 	return nil
 }
 
