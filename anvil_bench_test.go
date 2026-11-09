@@ -20,14 +20,11 @@ func BenchmarkMineBlock(b *testing.B) {
 func BenchmarkSetBalance(b *testing.B) {
 	anvil := startAnvil(b, NewAnvilBuilder())
 	ctx := context.Background()
-	_, addrs, err := anvil.Accounts()
-	if err != nil {
-		b.Fatal(err)
-	}
+	addr := anvil.Accounts()[0].Address
 	bal := big.NewInt(1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := anvil.SetBalance(ctx, addrs[0], bal); err != nil {
+		if err := anvil.SetBalance(ctx, addr, bal); err != nil {
 			b.Fatalf("set balance: %v", err)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"os/exec"
@@ -17,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -25,8 +25,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // Common errors
@@ -63,24 +61,46 @@ var (
 // so typical startup completes well before this deadline.
 const DefaultStartupTimeout = 5 * time.Second
 
-// AnvilMetrics contains runtime metrics for the Anvil instance
-type AnvilMetrics struct {
-	StartupTime   time.Duration
-	BlocksMined   uint64
-	RPCCalls      int64
-	LastError     error
-	LastErrorTime time.Time
+// pollInterval is how often WaitForBlock and WaitForMemPoolEmpty check the node.
+const pollInterval = 100 * time.Millisecond
+
+// SnapshotID identifies a saved chain state. It is opaque: get one from
+// Snapshot and pass it back to Revert.
+type SnapshotID string
+
+// Account is one of anvil's pre-funded default accounts.
+type Account struct {
+	Key     *ecdsa.PrivateKey
+	Address common.Address
 }
 
-// AnvilPrivateKey represents the default test account private keys
-type AnvilPrivateKey string
-
-// AnvilPrivateKeys are the default Anvil private keys for testing.
-var AnvilPrivateKeys = [...]AnvilPrivateKey{
+// defaultKeys are the private keys of the accounts anvil derives from its
+// default mnemonic. They are public test keys.
+var defaultKeys = [...]string{
 	"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
 	"59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
 	"5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+	"7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
+	"47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+	"8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
+	"92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e",
+	"4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
+	"dbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97",
+	"2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6",
 }
+
+// defaultAccounts parses defaultKeys once.
+var defaultAccounts = sync.OnceValue(func() []Account {
+	accounts := make([]Account, len(defaultKeys))
+	for i, hexKey := range defaultKeys {
+		key, err := crypto.HexToECDSA(hexKey)
+		if err != nil {
+			panic(fmt.Errorf("anvil: default key %d is invalid: %w", i, err))
+		}
+		accounts[i] = Account{Key: key, Address: crypto.PubkeyToAddress(key.PublicKey)}
+	}
+	return accounts
+})
 
 // lifecycle is the state of an Anvil instance. Instances are single-use:
 // new -> running -> stopped.
@@ -98,28 +118,24 @@ type Anvil struct {
 	cancel         context.CancelFunc
 	args           []string
 	startupTimeout time.Duration
-	logger         zerolog.Logger
+	logger         *slog.Logger
 
 	// mu guards the lifecycle fields below. RPC calls hold it only long enough
 	// to read the client pointers.
-	mu          sync.RWMutex
-	state       lifecycle
-	cmd         *exec.Cmd
-	exited      chan struct{} // closed once the process has exited and been reaped
-	rpcURL      string
-	client      *ethclient.Client
-	rpcClient   *rpc.Client
-	startupTime time.Duration
-
-	blocksMined atomic.Uint64
-	rpcCalls    atomic.Int64
+	mu        sync.RWMutex
+	state     lifecycle
+	cmd       *exec.Cmd
+	exited    chan struct{} // closed once the process has exited and been reaped
+	rpcURL    string
+	client    *ethclient.Client
+	rpcClient *rpc.Client
 
 	// baseline is the snapshot ResetState reverts to: the state right after
 	// Start, or after the last ResetFork. Empty if a reset failed partway.
 	// Start sets it under mu before the instance is running; after that it is
 	// guarded by baselineMu.
 	baselineMu sync.Mutex
-	baseline   string
+	baseline   SnapshotID
 }
 
 // NewAnvil creates a new Anvil instance with default configuration.
@@ -152,8 +168,6 @@ func (a *Anvil) Start() error {
 		return fmt.Errorf("%w: the instance was stopped and cannot be restarted", ErrAlreadyStarted)
 	}
 
-	startTime := time.Now()
-
 	anvilPath, err := resolveAnvilPath()
 	if err != nil {
 		return err
@@ -163,7 +177,7 @@ func (a *Anvil) Start() error {
 	stderrTail := &tailBuffer{max: 10}
 
 	stdout := &lineWriter{fn: func(line string) {
-		a.logger.Debug().Str("stream", "stdout").Msg(line)
+		a.logger.Debug(line, "stream", "stdout")
 		if addr, ok := strings.CutPrefix(line, "Listening on "); ok {
 			select {
 			case listening <- strings.TrimSpace(addr):
@@ -172,7 +186,7 @@ func (a *Anvil) Start() error {
 		}
 	}}
 	stderr := &lineWriter{fn: func(line string) {
-		a.logger.Warn().Str("stream", "stderr").Msg(line)
+		a.logger.Warn(line, "stream", "stderr")
 		stderrTail.add(line)
 	}}
 
@@ -218,14 +232,15 @@ func (a *Anvil) Start() error {
 				err = fmt.Errorf("%w (exit status 0): %s", ErrProcessExited, stderrTail)
 			}
 		}
-		if stopErr := a.shutdownLocked(); stopErr != nil {
-			a.logger.Error().Err(stopErr).Msg("Failed to stop anvil after failed startup")
+		stopErr := a.shutdownLocked()
+		if errors.Is(err, ErrStartupTimeout) {
+			// Output is discarded by default, so this may be the only trace of it.
+			err = fmt.Errorf("%w: %s", err, stderrTail)
 		}
-		return err
+		return errors.Join(err, stopErr)
 	}
 
 	a.state = stateRunning
-	a.startupTime = time.Since(startTime)
 	return nil
 }
 
@@ -369,29 +384,28 @@ func resolveAnvilPath() (string, error) {
 	return anvilPath, nil
 }
 
-// clients returns the RPC and Ethereum clients if the instance is running,
-// and ErrNotStarted otherwise.
-func (a *Anvil) clients() (*rpc.Client, *ethclient.Client, error) {
+// running returns the RPC client if the instance is running, and ErrNotStarted
+// otherwise.
+func (a *Anvil) running() (*rpc.Client, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	switch a.state {
 	case stateRunning:
-		return a.rpcClient, a.client, nil
+		return a.rpcClient, nil
 	case stateStopped:
-		return nil, nil, fmt.Errorf("%w: the instance is stopped", ErrNotStarted)
+		return nil, fmt.Errorf("%w: the instance is stopped", ErrNotStarted)
 	default:
-		return nil, nil, ErrNotStarted
+		return nil, ErrNotStarted
 	}
 }
 
 // call forwards a JSON-RPC call to anvil. It returns ErrNotStarted if the
 // instance is not running, and otherwise wraps any error with the method name.
 func (a *Anvil) call(ctx context.Context, result any, method string, args ...any) error {
-	c, _, err := a.clients()
+	c, err := a.running()
 	if err != nil {
 		return err
 	}
-	a.rpcCalls.Add(1)
 	if err := c.CallContext(ctx, result, method, args...); err != nil {
 		return fmt.Errorf("anvil: %s: %w", method, err)
 	}
@@ -424,31 +438,16 @@ func (a *Anvil) URL() string {
 	return a.rpcURL
 }
 
-// Accounts returns the default test accounts with their private keys and addresses.
-// Anvil provides pre-funded test accounts that can be used for testing.
-// Returns an error if any private key cannot be parsed.
-func (a *Anvil) Accounts() ([len(AnvilPrivateKeys)]*ecdsa.PrivateKey, [len(AnvilPrivateKeys)]common.Address, error) {
-	var (
-		keys     [len(AnvilPrivateKeys)]*ecdsa.PrivateKey
-		accounts [len(AnvilPrivateKeys)]common.Address
-	)
-
-	for i, keyStr := range AnvilPrivateKeys {
-		key, err := crypto.HexToECDSA(string(keyStr))
-		if err != nil {
-			return keys, accounts, fmt.Errorf("failed to convert private key at index %d: %w", i, err)
-		}
-		keys[i] = key
-		accounts[i] = crypto.PubkeyToAddress(key.PublicKey)
-	}
-
-	return keys, accounts, nil
+// Accounts returns anvil's ten pre-funded default accounts. They come from
+// anvil's default mnemonic and account count, so a node started with a
+// different --mnemonic or --accounts through WithArgs won't have them all.
+func (a *Anvil) Accounts() []Account {
+	return slices.Clone(defaultAccounts())
 }
 
 // MineBlock triggers the immediate mining of a new block.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) MineBlock(ctx context.Context) error {
-	a.blocksMined.Add(1)
 	return a.call(ctx, nil, "evm_mine")
 }
 
@@ -486,34 +485,33 @@ func (a *Anvil) StopImpersonating(ctx context.Context, address common.Address) e
 	return a.call(ctx, nil, "anvil_stopImpersonatingAccount", address)
 }
 
-// Snapshot creates a snapshot of the current blockchain state and returns a snapshot ID.
-// The snapshot can be reverted to using the Revert method.
-// Returns the snapshot ID string and an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) Snapshot(ctx context.Context) (string, error) {
-	var snapshotID string
-	err := a.call(ctx, &snapshotID, "evm_snapshot")
-	return snapshotID, err
+// Snapshot saves the current chain state and returns an ID to pass to Revert.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) Snapshot(ctx context.Context) (SnapshotID, error) {
+	var id SnapshotID
+	err := a.call(ctx, &id, "evm_snapshot")
+	return id, err
 }
 
-// Revert reverts the blockchain state to a previously created snapshot.
-// The snapshot ID should be obtained from a previous Snapshot() call.
-// Returns true if the revert was successful and an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) Revert(ctx context.Context, snapshotID string) (bool, error) {
+// Revert restores the chain state saved by Snapshot. A snapshot can be used
+// once: reverting also discards it and any taken after it. It returns false if
+// the snapshot no longer exists.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) Revert(ctx context.Context, id SnapshotID) (bool, error) {
 	var success bool
-	err := a.call(ctx, &success, "evm_revert", snapshotID)
+	err := a.call(ctx, &success, "evm_revert", id)
 	return success, err
 }
 
 // SetCode sets the bytecode at a given address.
 // Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) SetCode(ctx context.Context, address common.Address, code string) error {
-	return a.call(ctx, nil, "anvil_setCode", address, code)
+func (a *Anvil) SetCode(ctx context.Context, address common.Address, code []byte) error {
+	return a.call(ctx, nil, "anvil_setCode", address, hexutil.Bytes(code))
 }
 
-// SetStorageAt sets the storage value at a specific slot for an address.
-// The slot and value should be 32-byte hex strings with 0x prefix.
+// SetStorageAt sets the value of a storage slot at an address.
 // Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) SetStorageAt(ctx context.Context, address common.Address, slot string, value string) error {
+func (a *Anvil) SetStorageAt(ctx context.Context, address common.Address, slot, value common.Hash) error {
 	return a.call(ctx, nil, "anvil_setStorageAt", address, slot, value)
 }
 
@@ -584,7 +582,6 @@ func toBlockNumArg(number *big.Int) string {
 // SetNextBlockTimestamp and then MineBlock.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) error {
-	a.blocksMined.Add(numBlocks)
 	args := []any{hexutil.Uint64(numBlocks)}
 	if interval != 0 {
 		args = append(args, hexutil.Uint64(interval))
@@ -592,11 +589,13 @@ func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) err
 	return a.call(ctx, nil, "anvil_mine", args...)
 }
 
-// DropTransaction removes a transaction from the memory pool.
-// The transaction hash should be a hex string with 0x prefix.
+// DropTransaction removes a transaction from the pool. It returns false if
+// anvil dropped nothing, for example because the transaction isn't in the pool.
 // Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) DropTransaction(ctx context.Context, txHash string) error {
-	return a.call(ctx, nil, "anvil_dropTransaction", txHash)
+func (a *Anvil) DropTransaction(ctx context.Context, hash common.Hash) (bool, error) {
+	var dropped *common.Hash
+	err := a.call(ctx, &dropped, "anvil_dropTransaction", hash)
+	return dropped != nil, err
 }
 
 // SetAutomine enables or disables automatic mining of blocks.
@@ -687,20 +686,6 @@ func (a *Anvil) shutdownLocked() error {
 	return err
 }
 
-// Metrics returns current metrics for the Anvil instance including startup time,
-// blocks mined, RPC calls made, and any errors encountered. The metrics are thread-safe
-// and can be queried at any time during the instance's lifetime.
-func (a *Anvil) Metrics() AnvilMetrics {
-	a.mu.RLock()
-	startupTime := a.startupTime
-	a.mu.RUnlock()
-	return AnvilMetrics{
-		StartupTime: startupTime,
-		BlocksMined: a.blocksMined.Load(),
-		RPCCalls:    a.rpcCalls.Load(),
-	}
-}
-
 // ResetState reverts the chain to the state it had right after Start (or after
 // the last ResetFork), discarding every block, transaction and state change since.
 // It uses evm_snapshot/evm_revert, which is much faster than restarting the process.
@@ -712,7 +697,7 @@ func (a *Anvil) Metrics() AnvilMetrics {
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) ResetState(ctx context.Context) error {
 	// Checking the state first also orders this read of baseline after Start's write.
-	if _, _, err := a.clients(); err != nil {
+	if _, err := a.running(); err != nil {
 		return err
 	}
 
@@ -748,33 +733,35 @@ func (a *Anvil) retakeBaselineLocked(ctx context.Context) error {
 	return nil
 }
 
-// WaitForBlock waits for the blockchain to reach a specific block number.
-// It polls every 100ms until the target block is reached or the timeout expires.
-// Returns an error if the timeout is exceeded or if querying the block number fails.
-func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
-	_, client, err := a.clients()
-	if err != nil {
+// WaitForBlock waits until the chain reaches block number. It checks
+// immediately, then every 100ms, until the block is reached or ctx is done, so
+// pass a ctx with a deadline to bound the wait.
+// Returns an error if ctx is done first or if the query fails.
+func (a *Anvil) WaitForBlock(ctx context.Context, number uint64) error {
+	// Check the lifecycle first so ErrNotStarted isn't masked by a finished ctx.
+	if _, err := a.running(); err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(a.context, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
+		var current hexutil.Uint64
+		if err := a.call(ctx, &current, "eth_blockNumber"); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("waiting for block %d: %w", number, ctx.Err())
+			}
+			return err
+		}
+		if uint64(current) >= number {
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting for block %d: %w", number, ctx.Err())
 		case <-ticker.C:
-			current, err := client.BlockNumber(ctx)
-			if err != nil {
-				return fmt.Errorf("anvil: eth_blockNumber: %w", err)
-			}
-			if current >= number {
-				return nil
-			}
 		}
 	}
 }
@@ -782,39 +769,42 @@ func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
 // AnvilBuilder helps construct Anvil instances using the builder pattern.
 // It allows for flexible configuration of Anvil options before creating the instance.
 type AnvilBuilder struct {
-	args           []string
-	port           string // empty: anvil picks a free port
+	port           int
+	blockTime      time.Duration
+	chainID        *uint64
+	gasLimit       *uint64
+	forkURL        string
+	forkBlock      *uint64
+	extraArgs      []string
 	startupTimeout time.Duration
-	logLevel       zerolog.Level
+	logger         *slog.Logger
 }
 
 // NewAnvilBuilder creates a new AnvilBuilder with default configuration.
 // Use the With* methods to customize the configuration before calling Build().
 func NewAnvilBuilder() *AnvilBuilder {
-	return &AnvilBuilder{
-		startupTimeout: DefaultStartupTimeout,
-		logLevel:       zerolog.InfoLevel,
-	}
+	return &AnvilBuilder{startupTimeout: DefaultStartupTimeout}
 }
 
-// WithBlockTime sets the block time in seconds for automatic block mining.
-// Set to "0" to disable automatic mining. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithBlockTime(blockTime string) *AnvilBuilder {
-	b.args = append(b.args, "--block-time", blockTime)
+// WithBlockTime makes anvil mine a block every d instead of one per transaction.
+// Fractions of a second work. Zero, the default, leaves automine on.
+// Returns the builder for method chaining.
+func (b *AnvilBuilder) WithBlockTime(d time.Duration) *AnvilBuilder {
+	b.blockTime = d
 	return b
 }
 
 // WithFork configures Anvil to fork from a remote Ethereum node at the latest block.
 // Provide the RPC URL of the node to fork from. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithFork(fork string) *AnvilBuilder {
-	b.args = append(b.args, "--fork-url", fork)
+func (b *AnvilBuilder) WithFork(url string) *AnvilBuilder {
+	b.forkURL = url
 	return b
 }
 
-// WithForkBlockNumber sets the block number to fork from when using WithFork.
-// If not specified, Anvil will fork from the latest block. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithForkBlockNumber(blockNumber string) *AnvilBuilder {
-	b.args = append(b.args, "--fork-block-number", blockNumber)
+// WithForkBlockNumber sets the block number to fork from. It requires WithFork.
+// Returns the builder for method chaining.
+func (b *AnvilBuilder) WithForkBlockNumber(number uint64) *AnvilBuilder {
+	b.forkBlock = &number
 	return b
 }
 
@@ -822,37 +812,46 @@ func (b *AnvilBuilder) WithForkBlockNumber(blockNumber string) *AnvilBuilder {
 // a free port, which keeps parallel tests and test binaries from colliding; use
 // URL to find it. With a fixed port, Start returns ErrProcessExited if the port
 // is already in use. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithPort(port string) *AnvilBuilder {
+func (b *AnvilBuilder) WithPort(port int) *AnvilBuilder {
 	b.port = port
 	return b
 }
 
 // WithChainID sets the chain ID for the Anvil instance.
 // Default is 31337. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithChainID(chainID string) *AnvilBuilder {
-	b.args = append(b.args, "--chain-id", chainID)
+func (b *AnvilBuilder) WithChainID(id uint64) *AnvilBuilder {
+	b.chainID = &id
 	return b
 }
 
 // WithGasLimit sets the block gas limit for the Anvil instance.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithGasLimit(limit string) *AnvilBuilder {
-	b.args = append(b.args, "--gas-limit", limit)
+func (b *AnvilBuilder) WithGasLimit(limit uint64) *AnvilBuilder {
+	b.gasLimit = &limit
 	return b
 }
 
-// WithGasPrice sets the gas price for the Anvil instance in Wei.
+// WithArgs passes extra flags to anvil, after the ones the builder sets, for
+// options with no method of their own. For example:
+//
+//	WithArgs("--hardfork", "cancun", "--code-size-limit", "50000")
+//
+// Build rejects --silent, --quiet and -q, because they hide the output Start
+// waits for, and --port and -p; use WithPort. Stop kills the process, so flags
+// that act on a clean exit, such as --dump-state, don't take effect.
+// Calling WithArgs again adds to the earlier flags.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithGasPrice(price string) *AnvilBuilder {
-	b.args = append(b.args, "--gas-price", price)
+func (b *AnvilBuilder) WithArgs(args ...string) *AnvilBuilder {
+	b.extraArgs = append(b.extraArgs, args...)
 	return b
 }
 
-// WithLogLevel sets the level of the instance logger, which receives anvil's
-// stdout (at Debug) and stderr (at Warn). Use zerolog.Disabled to silence it.
-// Returns the builder for method chaining.
-func (b *AnvilBuilder) WithLogLevel(level zerolog.Level) *AnvilBuilder {
-	b.logLevel = level
+// WithLogger sets the logger that receives anvil's output: stdout at Debug and
+// stderr at Warn. A nil logger, the default, discards it. The handler runs on
+// the goroutine that reads anvil's output, so it must not block, or Stop will
+// hang. Returns the builder for method chaining.
+func (b *AnvilBuilder) WithLogger(logger *slog.Logger) *AnvilBuilder {
+	b.logger = logger
 	return b
 }
 
@@ -870,13 +869,45 @@ func (b *AnvilBuilder) WithStartupTimeout(d time.Duration) *AnvilBuilder {
 
 // validate checks the builder configuration
 func (b *AnvilBuilder) validate() error {
-	if b.port == "" {
-		return nil
+	if b.port < 0 || b.port > 65535 {
+		return fmt.Errorf("port %d is not in the range 0 to 65535", b.port)
 	}
-	if n, err := strconv.Atoi(b.port); err != nil || n < 0 || n > 65535 {
-		return fmt.Errorf("port %q is not a number from 0 to 65535", b.port)
+	if b.blockTime < 0 {
+		return fmt.Errorf("block time %s is negative", b.blockTime)
+	}
+	if b.forkBlock != nil && b.forkURL == "" {
+		return errors.New("WithForkBlockNumber requires WithFork")
+	}
+	for _, arg := range b.extraArgs {
+		switch flag, _, _ := strings.Cut(arg, "="); flag {
+		case "--silent", "--quiet", "-q":
+			return fmt.Errorf("WithArgs: %s hides the output Start waits for", flag)
+		case "--port", "-p":
+			return fmt.Errorf("WithArgs: use WithPort instead of %s", flag)
+		}
 	}
 	return nil
+}
+
+// renderArgs builds anvil's command line. Port 0 asks anvil for a free port.
+func (b *AnvilBuilder) renderArgs() []string {
+	args := []string{"--port", strconv.Itoa(b.port)}
+	if b.blockTime > 0 {
+		args = append(args, "--block-time", strconv.FormatFloat(b.blockTime.Seconds(), 'f', -1, 64))
+	}
+	if b.chainID != nil {
+		args = append(args, "--chain-id", strconv.FormatUint(*b.chainID, 10))
+	}
+	if b.gasLimit != nil {
+		args = append(args, "--gas-limit", strconv.FormatUint(*b.gasLimit, 10))
+	}
+	if b.forkURL != "" {
+		args = append(args, "--fork-url", b.forkURL)
+	}
+	if b.forkBlock != nil {
+		args = append(args, "--fork-block-number", strconv.FormatUint(*b.forkBlock, 10))
+	}
+	return append(args, b.extraArgs...)
 }
 
 // Build creates an Anvil instance with the configured options.
@@ -887,23 +918,21 @@ func (b *AnvilBuilder) Build() (*Anvil, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
-	port := b.port
-	if port == "" {
-		port = "0" // anvil binds a free port and prints it on startup
-	}
 	timeout := b.startupTimeout
 	if timeout <= 0 {
 		timeout = DefaultStartupTimeout // e.g. a zero-value AnvilBuilder
 	}
-	args := append(slices.Clone(b.args), "--port", port)
+	logger := b.logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // cancel is stored on Anvil.cancel and invoked in Stop()
-	logger := log.With().Str("component", "anvil").Logger().Level(b.logLevel)
 
 	return &Anvil{
 		context:        ctx,
 		cancel:         cancel,
-		args:           args,
+		args:           b.renderArgs(),
 		startupTimeout: timeout,
 		logger:         logger,
 	}, nil

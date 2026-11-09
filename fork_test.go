@@ -45,12 +45,12 @@ func TestForkAtBlock(t *testing.T) {
 	t.Parallel()
 	url := requireForkURL(t)
 
-	const forkBlock = "18000000" // a mainnet block known to have state
+	const forkBlock = 18_000_000 // a mainnet block known to have state
 
 	anvil := startAnvil(t, NewAnvilBuilder().WithFork(url).WithForkBlockNumber(forkBlock))
 
 	ctx := t.Context()
 	block, err := anvil.Client().BlockNumber(ctx)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, block, uint64(18_000_000))
+	assert.GreaterOrEqual(t, block, uint64(forkBlock))
 }

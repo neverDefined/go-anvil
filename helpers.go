@@ -156,7 +156,7 @@ func parseStorageKey(key string) ([]byte, error) {
 // Returns an error if the timeout is exceeded, ctx is canceled, or the query fails.
 func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) error {
 	// Check the lifecycle first so ErrNotStarted isn't masked by an expired timeout.
-	if _, _, err := a.clients(); err != nil {
+	if _, err := a.running(); err != nil {
 		return err
 	}
 
@@ -166,7 +166,7 @@ func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) 
 		defer cancel()
 	}
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
