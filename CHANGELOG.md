@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
 ### Added
 
 - Package overview in `doc.go` and runnable godoc examples (#70).
-- `GetProof(ctx, address, storageKeys, blockNumber)` wraps EIP-1186 `eth_getProof` and returns `*AccountResult`, for light-client tests (#84).
+- `GetProof(ctx, address, storageKeys, blockNumber)`, with storage keys as `[]common.Hash`, wraps EIP-1186 `eth_getProof` and returns `*AccountResult`, for light-client tests (#84).
 - `VerifyProof(stateRoot, proof)` verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
 - `URL()` returns the node's HTTP JSON-RPC endpoint.
 - `ErrProcessExited`, returned by `Start()` when anvil exits before it is ready.
@@ -37,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `Snapshot` and `Revert` use a `SnapshotID` type (#63).
 - **Breaking:** `New`, `NewBuilder` and `Builder` replace `NewAnvil`, `NewAnvilBuilder` and `AnvilBuilder`.
 - **Breaking:** `WaitForMemPoolEmpty(ctx)` no longer takes a timeout. Put a deadline on `ctx`.
-- **Breaking:** `GetProof` takes storage keys as `[]common.Hash` instead of hex strings.
 - **Breaking:** `WaitForBlock(ctx, number)` replaces `WaitForBlock(number, timeout)`. Put a deadline on `ctx`. It now checks before its first 100ms tick.
 - **Breaking:** `Accounts()` returns all ten default accounts as `[]Account` and no longer returns an error (#62):
 
@@ -69,10 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Start()` no longer reports success while connected to another process when the port is already in use. It returns `ErrProcessExited` with anvil's error.
 - `Start()` returns as soon as anvil exits during startup (for example, on an invalid flag), with anvil's stderr in the error, instead of waiting for the full startup timeout.
-- RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. A `Start()` that failed counts as the first call, because instances are single-use. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
+- RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. A `Start()` that fails after launching anvil counts as the first call, because instances are single-use. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
 - `Close()` no longer sleeps for 1 second after the process has exited (#80).
 - `Mine(ctx, n, x)` documented `x` as a timestamp, but anvil treats it as the number of seconds between blocks, so passing a Unix time moved the chain decades ahead. The parameter is now named `interval` and the README shows `SetNextBlockTimestamp` + `MineBlock` for an absolute time.
-- `ResetState()` returns to the state right after `Start()`. Its first call used to snapshot whatever state existed at that moment. A failed snapshot no longer breaks later resets for good, and concurrent calls are serialized instead of consuming the same snapshot (#79).
+- `ResetState()` returns to the state right after `Start()`. Its first call used to snapshot whatever state existed at that moment. Concurrent calls are serialized instead of consuming the same snapshot (#79).
 - `WaitForMemPoolEmpty()` counts queued transactions as well as pending ones (via `txpool_status`), and checks before its first 100ms tick.
 
 ## [0.1.0] - 2026-04-23
@@ -150,5 +151,6 @@ First tagged release. Captures the full feature set built over phases 0–3 of t
 
 - Leaked `context.CancelFunc` in `Build()` — was stored on `Anvil.cancel` but never invoked. `Stop()` now calls it (with `Close()` delegating to `Stop()`), so the context — and its bound anvil subprocess via `exec.CommandContext` — shuts down cleanly.
 
-[Unreleased]: https://github.com/neverDefined/go-anvil/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/neverDefined/go-anvil/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/neverDefined/go-anvil/releases/tag/v0.2.0
 [0.1.0]: https://github.com/neverDefined/go-anvil/releases/tag/v0.1.0
