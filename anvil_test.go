@@ -94,18 +94,11 @@ func TestAnvil(t *testing.T) {
 		err = anvil.MineBlock(ctx)
 		require.NoError(t, err)
 
-		// Wait for block to be mined
-		err = retry(5, time.Second, func() error {
-			currentBlock, err := client.BlockNumber(ctx)
-			if err != nil {
-				return err
-			}
-			if currentBlock != initialBlockNum+1 {
-				return fmt.Errorf("expected block %d, got %d", initialBlockNum+1, currentBlock)
-			}
-			return nil
-		})
+		// evm_mine is synchronous. This instance also mines every second, so
+		// the head may already be further along.
+		currentBlock, err := client.BlockNumber(ctx)
 		require.NoError(t, err)
+		assert.GreaterOrEqual(t, currentBlock, initialBlockNum+1)
 
 		metrics := anvil.Metrics()
 		assert.Equal(t, uint64(1), metrics.BlocksMined)

@@ -40,14 +40,8 @@ var (
 	// ErrConnectionFailed indicates the connection to Anvil failed
 	ErrConnectionFailed = fmt.Errorf("anvil: connection failed")
 
-	// ErrProcessNotFound indicates the Anvil process could not be found
-	ErrProcessNotFound = fmt.Errorf("anvil: process not found")
-
 	// ErrInvalidConfig indicates the configuration is invalid
 	ErrInvalidConfig = fmt.Errorf("anvil: invalid configuration")
-
-	// ErrRPCCallFailed indicates an RPC call to Anvil failed
-	ErrRPCCallFailed = fmt.Errorf("anvil: RPC call failed")
 
 	// ErrAnvilNotFound indicates the anvil binary could not be located on PATH or at the Foundry fallback path
 	ErrAnvilNotFound = fmt.Errorf("anvil: binary not found")
@@ -63,28 +57,6 @@ var (
 	// The error message includes the exit status and anvil's last stderr lines.
 	ErrProcessExited = fmt.Errorf("anvil: process exited during startup")
 )
-
-// AnvilConfig holds the configuration for Anvil client
-type AnvilConfig struct {
-	DefaultTimeout time.Duration
-	StartupSleep   time.Duration
-	DefaultRPCURL  string
-	DefaultWSURL   string
-	MaxRetries     int
-	RetryInterval  time.Duration
-	LogLevel       zerolog.Level
-}
-
-// DefaultConfig provides default configuration values for Anvil client
-var DefaultConfig = AnvilConfig{
-	DefaultTimeout: 10 * time.Second,
-	StartupSleep:   time.Second / 3,
-	DefaultRPCURL:  "http://127.0.0.1:8545",
-	DefaultWSURL:   "ws://127.0.0.1:8545",
-	MaxRetries:     5,
-	RetryInterval:  100 * time.Millisecond,
-	LogLevel:       zerolog.InfoLevel,
-}
 
 // DefaultStartupTimeout is the default ceiling for waiting on anvil to become ready.
 // The readiness probe polls on a short interval and returns on the first successful RPC,
@@ -413,24 +385,15 @@ func (a *Anvil) clients() (*rpc.Client, *ethclient.Client, error) {
 }
 
 // call forwards a JSON-RPC call to anvil. It returns ErrNotStarted if the
-// instance is not running.
+// instance is not running, and otherwise wraps any error with the method name.
 func (a *Anvil) call(ctx context.Context, result any, method string, args ...any) error {
 	c, _, err := a.clients()
 	if err != nil {
 		return err
 	}
 	a.rpcCalls.Add(1)
-	return c.CallContext(ctx, result, method, args...)
-}
-
-// retry attempts an operation with exponential backoff
-func retry(attempts int, sleep time.Duration, f func() error) error {
-	if err := f(); err != nil {
-		if attempts--; attempts > 0 {
-			time.Sleep(sleep)
-			return retry(attempts, sleep*2, f)
-		}
-		return err
+	if err := c.CallContext(ctx, result, method, args...); err != nil {
+		return fmt.Errorf("anvil: %s: %w", method, err)
 	}
 	return nil
 }
@@ -473,7 +436,6 @@ func (a *Anvil) Accounts() ([len(AnvilPrivateKeys)]*ecdsa.PrivateKey, [len(Anvil
 	for i, keyStr := range AnvilPrivateKeys {
 		key, err := crypto.HexToECDSA(string(keyStr))
 		if err != nil {
-			a.logger.Error().Err(err).Int("index", i).Msg("Failed to convert private key")
 			return keys, accounts, fmt.Errorf("failed to convert private key at index %d: %w", i, err)
 		}
 		keys[i] = key
@@ -487,11 +449,7 @@ func (a *Anvil) Accounts() ([len(AnvilPrivateKeys)]*ecdsa.PrivateKey, [len(Anvil
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) MineBlock(ctx context.Context) error {
 	a.blocksMined.Add(1)
-	err := a.call(ctx, nil, "evm_mine")
-	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to mine block")
-	}
-	return err
+	return a.call(ctx, nil, "evm_mine")
 }
 
 // SetNextBlockTimestamp sets the timestamp for the next block to be mined.
@@ -499,53 +457,33 @@ func (a *Anvil) MineBlock(ctx context.Context) error {
 // The timestamp is in Unix seconds.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetNextBlockTimestamp(ctx context.Context, timestamp int64) error {
-	err := a.call(ctx, nil, "evm_setNextBlockTimestamp", timestamp)
-	if err != nil {
-		a.logger.Error().Err(err).Int64("timestamp", timestamp).Msg("Failed to set next block timestamp")
-	}
-	return err
+	return a.call(ctx, nil, "evm_setNextBlockTimestamp", timestamp)
 }
 
 // IncreaseTime increases the current block time by the specified number of seconds.
 // This affects all future blocks and is useful for testing time-dependent contracts.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) IncreaseTime(ctx context.Context, seconds int64) error {
-	err := a.call(ctx, nil, "evm_increaseTime", seconds)
-	if err != nil {
-		a.logger.Error().Err(err).Int64("seconds", seconds).Msg("Failed to increase time")
-	}
-	return err
+	return a.call(ctx, nil, "evm_increaseTime", seconds)
 }
 
 // SetBalance sets the balance of an account to the specified amount in Wei.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetBalance(ctx context.Context, address common.Address, balance *big.Int) error {
-	err := a.call(ctx, nil, "anvil_setBalance", address, balance.String())
-	if err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Str("balance", balance.String()).Msg("Failed to set balance")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_setBalance", address, balance.String())
 }
 
 // Impersonate enables impersonating an account, allowing transactions to be sent
 // from that address without needing the private key.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) Impersonate(ctx context.Context, address common.Address) error {
-	err := a.call(ctx, nil, "anvil_impersonateAccount", address)
-	if err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Msg("Failed to impersonate account")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_impersonateAccount", address)
 }
 
 // StopImpersonating stops impersonating an account that was previously impersonated.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) StopImpersonating(ctx context.Context, address common.Address) error {
-	err := a.call(ctx, nil, "anvil_stopImpersonatingAccount", address)
-	if err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Msg("Failed to stop impersonating account")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_stopImpersonatingAccount", address)
 }
 
 // Snapshot creates a snapshot of the current blockchain state and returns a snapshot ID.
@@ -554,9 +492,6 @@ func (a *Anvil) StopImpersonating(ctx context.Context, address common.Address) e
 func (a *Anvil) Snapshot(ctx context.Context) (string, error) {
 	var snapshotID string
 	err := a.call(ctx, &snapshotID, "evm_snapshot")
-	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to create snapshot")
-	}
 	return snapshotID, err
 }
 
@@ -566,49 +501,34 @@ func (a *Anvil) Snapshot(ctx context.Context) (string, error) {
 func (a *Anvil) Revert(ctx context.Context, snapshotID string) (bool, error) {
 	var success bool
 	err := a.call(ctx, &success, "evm_revert", snapshotID)
-	if err != nil {
-		a.logger.Error().Err(err).Str("snapshotID", snapshotID).Msg("Failed to revert to snapshot")
-	}
 	return success, err
 }
 
 // SetCode sets the bytecode at a given address.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetCode(ctx context.Context, address common.Address, code string) error {
-	err := a.call(ctx, nil, "anvil_setCode", address, code)
-	if err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Msg("Failed to set code")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_setCode", address, code)
 }
 
 // SetStorageAt sets the storage value at a specific slot for an address.
 // The slot and value should be 32-byte hex strings with 0x prefix.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetStorageAt(ctx context.Context, address common.Address, slot string, value string) error {
-	err := a.call(ctx, nil, "anvil_setStorageAt", address, slot, value)
-	if err != nil {
-		a.logger.Error().Err(err).
-			Str("address", address.Hex()).
-			Str("slot", slot).
-			Str("value", value).
-			Msg("Failed to set storage")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_setStorageAt", address, slot, value)
 }
 
 // SetNonce sets the nonce for a given address.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetNonce(ctx context.Context, address common.Address, nonce uint64) error {
-	err := a.call(ctx, nil, "anvil_setNonce", address, fmt.Sprintf("0x%x", nonce))
-	if err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Uint64("nonce", nonce).Msg("Failed to set nonce")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_setNonce", address, hexutil.Uint64(nonce))
 }
 
 // AccountResult is an EIP-1186 account proof with its storage proofs, as
 // returned by eth_getProof.
+//
+// It has the same fields and JSON tags as gethclient.AccountResult. go-anvil
+// doesn't use that type because importing gethclient pulls go-ethereum's p2p
+// stack into every build.
 type AccountResult struct {
 	Address      common.Address  `json:"address"`
 	AccountProof []string        `json:"accountProof"`
@@ -638,7 +558,6 @@ func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKey
 	}
 	var result AccountResult
 	if err := a.call(ctx, &result, "eth_getProof", address, storageKeys, toBlockNumArg(blockNumber)); err != nil {
-		a.logger.Error().Err(err).Str("address", address.Hex()).Msg("Failed to get proof")
 		return nil, err
 	}
 	return &result, nil
@@ -666,61 +585,38 @@ func toBlockNumArg(number *big.Int) string {
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) error {
 	a.blocksMined.Add(numBlocks)
-
-	var err error
+	args := []any{hexutil.Uint64(numBlocks)}
 	if interval != 0 {
-		err = a.call(ctx, nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks), fmt.Sprintf("0x%x", interval))
-	} else {
-		err = a.call(ctx, nil, "anvil_mine", fmt.Sprintf("0x%x", numBlocks))
+		args = append(args, hexutil.Uint64(interval))
 	}
-
-	if err != nil {
-		a.logger.Error().Err(err).Uint64("numBlocks", numBlocks).Msg("Failed to mine blocks")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_mine", args...)
 }
 
 // DropTransaction removes a transaction from the memory pool.
 // The transaction hash should be a hex string with 0x prefix.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) DropTransaction(ctx context.Context, txHash string) error {
-	err := a.call(ctx, nil, "anvil_dropTransaction", txHash)
-	if err != nil {
-		a.logger.Error().Err(err).Str("txHash", txHash).Msg("Failed to drop transaction")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_dropTransaction", txHash)
 }
 
 // SetAutomine enables or disables automatic mining of blocks.
 // When disabled, blocks must be mined manually using MineBlock or Mine.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetAutomine(ctx context.Context, enabled bool) error {
-	err := a.call(ctx, nil, "evm_setAutomine", enabled)
-	if err != nil {
-		a.logger.Error().Err(err).Bool("enabled", enabled).Msg("Failed to set automine")
-	}
-	return err
+	return a.call(ctx, nil, "evm_setAutomine", enabled)
 }
 
 // SetIntervalMining sets the mining behavior to interval mining with the specified interval in seconds.
 // Set to 0 to disable interval mining.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetIntervalMining(ctx context.Context, seconds uint64) error {
-	err := a.call(ctx, nil, "evm_setIntervalMining", seconds)
-	if err != nil {
-		a.logger.Error().Err(err).Uint64("seconds", seconds).Msg("Failed to set interval mining")
-	}
-	return err
+	return a.call(ctx, nil, "evm_setIntervalMining", seconds)
 }
 
 // AutoImpersonate enables or disables automatic impersonation for all transactions.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) AutoImpersonate(ctx context.Context, enabled bool) error {
-	err := a.call(ctx, nil, "anvil_autoImpersonateAccount", enabled)
-	if err != nil {
-		a.logger.Error().Err(err).Bool("enabled", enabled).Msg("Failed to set auto impersonate")
-	}
-	return err
+	return a.call(ctx, nil, "anvil_autoImpersonateAccount", enabled)
 }
 
 // ResetFork resets the fork to a fresh state, optionally at a new block number.
@@ -729,24 +625,11 @@ func (a *Anvil) AutoImpersonate(ctx context.Context, enabled bool) error {
 // the freshly reset state rather than the state after Start.
 // Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) ResetFork(ctx context.Context, forkURL string, blockNumber uint64) error {
-	var err error
+	forking := map[string]any{"jsonRpcUrl": forkURL}
 	if blockNumber != 0 {
-		err = a.call(ctx, nil, "anvil_reset", map[string]any{
-			"forking": map[string]any{
-				"jsonRpcUrl":  forkURL,
-				"blockNumber": fmt.Sprintf("0x%x", blockNumber),
-			},
-		})
-	} else {
-		err = a.call(ctx, nil, "anvil_reset", map[string]any{
-			"forking": map[string]any{
-				"jsonRpcUrl": forkURL,
-			},
-		})
+		forking["blockNumber"] = hexutil.Uint64(blockNumber)
 	}
-
-	if err != nil {
-		a.logger.Error().Err(err).Str("forkURL", forkURL).Msg("Failed to reset fork")
+	if err := a.call(ctx, nil, "anvil_reset", map[string]any{"forking": forking}); err != nil {
 		return err
 	}
 
@@ -887,16 +770,11 @@ func (a *Anvil) WaitForBlock(number uint64, timeout time.Duration) error {
 		case <-ticker.C:
 			current, err := client.BlockNumber(ctx)
 			if err != nil {
-				a.logger.Error().Err(err).Msg("Failed to get block number")
-				return err
+				return fmt.Errorf("anvil: eth_blockNumber: %w", err)
 			}
 			if current >= number {
 				return nil
 			}
-			a.logger.Debug().
-				Uint64("current", current).
-				Uint64("target", number).
-				Msg("Waiting for block")
 		}
 	}
 }
@@ -915,7 +793,7 @@ type AnvilBuilder struct {
 func NewAnvilBuilder() *AnvilBuilder {
 	return &AnvilBuilder{
 		startupTimeout: DefaultStartupTimeout,
-		logLevel:       DefaultConfig.LogLevel,
+		logLevel:       zerolog.InfoLevel,
 	}
 }
 
@@ -970,8 +848,9 @@ func (b *AnvilBuilder) WithGasPrice(price string) *AnvilBuilder {
 	return b
 }
 
-// WithLogLevel sets the logging level for the Anvil client.
-// Use zerolog.Disabled to silence all logs. Returns the builder for method chaining.
+// WithLogLevel sets the level of the instance logger, which receives anvil's
+// stdout (at Debug) and stderr (at Warn). Use zerolog.Disabled to silence it.
+// Returns the builder for method chaining.
 func (b *AnvilBuilder) WithLogLevel(level zerolog.Level) *AnvilBuilder {
 	b.logLevel = level
 	return b
