@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -68,7 +69,8 @@ const pollInterval = 100 * time.Millisecond
 // Snapshot and pass it back to Revert.
 type SnapshotID string
 
-// Account is one of anvil's pre-funded default accounts.
+// Account is a private key and its address. Accounts returns anvil's pre-funded
+// default accounts, and NewFundedAccount creates new ones.
 type Account struct {
 	Key     *ecdsa.PrivateKey
 	Address common.Address
@@ -131,7 +133,7 @@ type Anvil struct {
 	rpcClient *rpc.Client
 
 	// baseline is the snapshot ResetState reverts to: the state right after
-	// Start, or after the last ResetFork. Empty if a reset failed partway.
+	// Start, or after the last Reset. Empty if a reset failed partway.
 	// Start sets it under mu before the instance is running; after that it is
 	// guarded by baselineMu.
 	baselineMu sync.Mutex
@@ -438,6 +440,33 @@ func (a *Anvil) URL() string {
 	return a.rpcURL
 }
 
+// WSURL returns the WebSocket JSON-RPC endpoint of the node, for example
+// "ws://127.0.0.1:53817". anvil serves HTTP and WebSocket on the same port.
+// It is empty before Start and after Stop.
+func (a *Anvil) WSURL() string {
+	url := a.URL()
+	if url == "" {
+		return ""
+	}
+	return "ws" + strings.TrimPrefix(url, "http")
+}
+
+// DialWS opens a new WebSocket connection to the node. Subscriptions such as
+// SubscribeNewHead and SubscribeFilterLogs need one, because the HTTP client
+// from Client can't receive pushed events. The caller closes the returned
+// client.
+func (a *Anvil) DialWS(ctx context.Context) (*ethclient.Client, error) {
+	url := a.WSURL()
+	if url == "" {
+		return nil, ErrNotStarted
+	}
+	client, err := ethclient.DialContext(ctx, url)
+	if err != nil {
+		return nil, fmt.Errorf("anvil: dial websocket: %w", err)
+	}
+	return client, nil
+}
+
 // Accounts returns anvil's ten pre-funded default accounts. They come from
 // anvil's default mnemonic and account count, so a node started with a
 // different --mnemonic or --accounts through WithArgs won't have them all.
@@ -618,17 +647,166 @@ func (a *Anvil) AutoImpersonate(ctx context.Context, enabled bool) error {
 	return a.call(ctx, nil, "anvil_autoImpersonateAccount", enabled)
 }
 
-// ResetFork resets the fork to a fresh state, optionally at a new block number.
-// If blockNumber is 0, resets to the original fork block or latest block.
-// anvil discards every snapshot on reset, so afterwards ResetState returns to
-// the freshly reset state rather than the state after Start.
-// Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) ResetFork(ctx context.Context, forkURL string, blockNumber uint64) error {
-	forking := map[string]any{"jsonRpcUrl": forkURL}
-	if blockNumber != 0 {
-		forking["blockNumber"] = hexutil.Uint64(blockNumber)
+// TxArgs describes a transaction for SendTransaction and DebugTraceCall.
+// Only From is required.
+type TxArgs struct {
+	From  common.Address
+	To    *common.Address // nil creates a contract from Data
+	Value *big.Int        // nil sends no ether
+	Data  []byte
+	Gas   uint64 // zero lets anvil estimate it
+}
+
+// params encodes the set fields as a JSON-RPC transaction object.
+func (tx TxArgs) params() map[string]any {
+	params := map[string]any{"from": tx.From}
+	if tx.To != nil {
+		params["to"] = tx.To
 	}
-	if err := a.call(ctx, nil, "anvil_reset", map[string]any{"forking": forking}); err != nil {
+	if tx.Value != nil {
+		params["value"] = (*hexutil.Big)(tx.Value)
+	}
+	if len(tx.Data) > 0 {
+		params["data"] = hexutil.Bytes(tx.Data)
+	}
+	if tx.Gas != 0 {
+		params["gas"] = hexutil.Uint64(tx.Gas)
+	}
+	return params
+}
+
+// SendTransaction submits a transaction that anvil signs itself, which works
+// for its default accounts and for impersonated addresses. To send from a key
+// you hold, sign the transaction and use Client().SendTransaction.
+//
+// With automine on, this can return just before the transaction is mined, so
+// wait for its receipt, for example with bind.WaitMinedHash.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) SendTransaction(ctx context.Context, tx TxArgs) (common.Hash, error) {
+	var hash common.Hash
+	err := a.call(ctx, &hash, "eth_sendTransaction", tx.params())
+	return hash, err
+}
+
+// TraceConfig chooses the tracer for DebugTraceTransaction and DebugTraceCall.
+type TraceConfig struct {
+	// Tracer names a built-in tracer such as "callTracer" or "prestateTracer".
+	// Empty uses the opcode logger.
+	Tracer string `json:"tracer,omitempty"`
+	// TracerConfig holds options for the tracer, for example
+	// map[string]any{"onlyTopCall": true}.
+	TracerConfig any `json:"tracerConfig,omitempty"`
+}
+
+// DebugTraceTransaction returns the trace of a mined transaction as raw JSON,
+// whose shape depends on the tracer. A nil config uses the opcode logger, whose
+// log anvil leaves empty unless it was started with WithArgs("--steps-tracing").
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) DebugTraceTransaction(ctx context.Context, hash common.Hash, config *TraceConfig) (json.RawMessage, error) {
+	return a.trace(ctx, "debug_traceTransaction", config, hash)
+}
+
+// DebugTraceCall simulates tx at a block and returns its trace as raw JSON,
+// without changing the chain. A nil blockNumber means the latest block, and a
+// nil config uses the opcode logger.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) DebugTraceCall(ctx context.Context, tx TxArgs, blockNumber *big.Int, config *TraceConfig) (json.RawMessage, error) {
+	return a.trace(ctx, "debug_traceCall", config, tx.params(), toBlockNumArg(blockNumber))
+}
+
+// trace calls a debug_trace method, leaving out a nil config because anvil
+// rejects null there.
+func (a *Anvil) trace(ctx context.Context, method string, config *TraceConfig, args ...any) (json.RawMessage, error) {
+	if config != nil {
+		args = append(args, config)
+	}
+	var result json.RawMessage
+	err := a.call(ctx, &result, method, args...)
+	return result, err
+}
+
+// DumpState returns the chain state as an opaque blob for LoadState. Use it to
+// keep a fixture, such as a set of deployed contracts, between test runs.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) DumpState(ctx context.Context) ([]byte, error) {
+	var state hexutil.Bytes
+	err := a.call(ctx, &state, "anvil_dumpState")
+	return state, err
+}
+
+// LoadState applies a blob from DumpState, which may come from another
+// instance. It merges rather than replaces: accounts in the blob are
+// overwritten and other accounts are left as they are. On a node that isn't
+// forked, the head moves to the block number in the blob.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) LoadState(ctx context.Context, state []byte) error {
+	return a.call(ctx, nil, "anvil_loadState", hexutil.Bytes(state))
+}
+
+// DealERC20 sets the token balance of to. anvil finds the balance slot by
+// simulating balanceOf, so it returns an error for a token that doesn't keep
+// balances in its own storage. The total supply doesn't change.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) DealERC20(ctx context.Context, token, to common.Address, amount *big.Int) error {
+	return a.call(ctx, nil, "anvil_dealERC20", to, token, (*hexutil.Big)(amount))
+}
+
+// SetERC20Allowance sets how much of owner's token balance spender may use.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) SetERC20Allowance(ctx context.Context, token, owner, spender common.Address, amount *big.Int) error {
+	return a.call(ctx, nil, "anvil_setERC20Allowance", owner, spender, token, (*hexutil.Big)(amount))
+}
+
+// SetNextBlockBaseFee sets the base fee of the next block, in wei. Later blocks
+// adjust from it as usual.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) SetNextBlockBaseFee(ctx context.Context, fee uint64) error {
+	return a.call(ctx, nil, "anvil_setNextBlockBaseFeePerGas", hexutil.Uint64(fee))
+}
+
+// SetCoinbase sets the miner address of future blocks.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) SetCoinbase(ctx context.Context, address common.Address) error {
+	return a.call(ctx, nil, "anvil_setCoinbase", address)
+}
+
+// SetBlockGasLimit sets the gas limit of future blocks.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) SetBlockGasLimit(ctx context.Context, limit uint64) error {
+	return a.call(ctx, nil, "evm_setBlockGasLimit", hexutil.Uint64(limit))
+}
+
+// ForkOptions says what Reset should fork.
+type ForkOptions struct {
+	// URL is the node to fork from. Empty keeps the current fork URL, which
+	// fails on a node that isn't forked.
+	URL string
+	// BlockNumber is the block to fork at. Zero means the upstream's latest
+	// block, not the block the node first forked at.
+	BlockNumber uint64
+}
+
+// Reset discards the chain and starts over. With nil, the node becomes a fresh
+// local chain with its default accounts funded, and a forked node stops
+// forking. With options, the node forks again as they describe.
+//
+// To undo changes while keeping the node as it started, use ResetState, which
+// is faster. anvil discards every snapshot on reset, so afterwards ResetState
+// returns to the freshly reset state rather than the state after Start.
+// Returns an error if the RPC call fails or if ctx is canceled.
+func (a *Anvil) Reset(ctx context.Context, fork *ForkOptions) error {
+	var args []any
+	if fork != nil {
+		forking := map[string]any{}
+		if fork.URL != "" {
+			forking["jsonRpcUrl"] = fork.URL
+		}
+		if fork.BlockNumber != 0 {
+			forking["blockNumber"] = hexutil.Uint64(fork.BlockNumber)
+		}
+		args = append(args, map[string]any{"forking": forking})
+	}
+	if err := a.call(ctx, nil, "anvil_reset", args...); err != nil {
 		return err
 	}
 
@@ -687,10 +865,10 @@ func (a *Anvil) shutdownLocked() error {
 }
 
 // ResetState reverts the chain to the state it had right after Start (or after
-// the last ResetFork), discarding every block, transaction and state change since.
+// the last Reset), discarding every block, transaction and state change since.
 // It uses evm_snapshot/evm_revert, which is much faster than restarting the process.
-// Node settings that are not chain state, such as automine or impersonation,
-// are not reset.
+// Node settings that are not chain state, such as automine, impersonation or
+// the coinbase, are not reset.
 //
 // Concurrent calls are serialized. Resetting does not isolate tests that run in
 // parallel against the same instance; give those their own instances.
