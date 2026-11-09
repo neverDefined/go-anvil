@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GetProof(ctx, address, storageKeys, blockNumber)` — EIP-1186 `eth_getProof` wrapper returning `*AccountResult`, for light-client style tests (#84).
 - `VerifyProof(stateRoot, proof)` — verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
 
+### Changed
+
+- Minimum `github.com/ethereum/go-ethereum` is now v1.17.10.
+
 ## [0.1.0] - 2026-04-23
 
 First tagged release. Captures the full feature set built over phases 0–3 of the maintainer roadmap (tracking issue #12), plus the original pre-roadmap work.

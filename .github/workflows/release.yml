@@ -17,14 +17,14 @@ jobs:
         with:
           fetch-depth: 0 # full history for release-notes generation
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: stable
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.5.1
+          version: v1.9.0
 
       - name: Tests must pass at the tagged commit
         run: go test -race ./...

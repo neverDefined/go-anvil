@@ -41,8 +41,11 @@ linters:
 
     revive:
       rules:
+        # Every exported identifier needs a godoc comment that starts with its name.
+        # The stutter check is off because Anvil-prefixed type names like AnvilBuilder are intentional.
         - name: exported
-          disabled: true # AnvilConfig / AnvilBuilder package-prefixed names are intentional
+          arguments:
+            - disableStutteringCheck
 
   exclusions:
     rules:
