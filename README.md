@@ -42,7 +42,7 @@ func main() {
     ctx := context.Background()
 
     // Create and start an Anvil instance
-    anvil, err := anvil.NewAnvil()
+    anvil, err := anvil.New()
     if err != nil {
         log.Fatal(err)
     }
@@ -76,7 +76,7 @@ Use the builder pattern for custom configuration:
 // anvil's stdout is logged at Debug, so use a handler that shows it
 logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-anvil, err := anvil.NewAnvilBuilder().
+anvil, err := anvil.NewBuilder().
     WithBlockTime(time.Second).      // Mine a block every second
     WithChainID(1337).               // Custom chain ID
     WithGasLimit(12_000_000).        // Block gas limit
@@ -196,7 +196,7 @@ Anvil picks its own port and starts in about 50 ms, so give each test its own in
 func TestMyContract(t *testing.T) {
     t.Parallel()
 
-    node, err := anvil.NewAnvil()
+    node, err := anvil.New()
     require.NoError(t, err)
     require.NoError(t, node.Start())
     t.Cleanup(func() { _ = node.Close() })

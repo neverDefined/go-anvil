@@ -28,7 +28,7 @@ func TestForkLatest(t *testing.T) {
 	t.Parallel()
 	url := requireForkURL(t)
 
-	anvil := startAnvil(t, NewAnvilBuilder().WithFork(url))
+	anvil := startAnvil(t, NewBuilder().WithFork(url))
 
 	ctx := t.Context()
 	block, err := anvil.Client().BlockNumber(ctx)
@@ -47,7 +47,7 @@ func TestForkAtBlock(t *testing.T) {
 
 	const forkBlock = 18_000_000 // a mainnet block known to have state
 
-	anvil := startAnvil(t, NewAnvilBuilder().WithFork(url).WithForkBlockNumber(forkBlock))
+	anvil := startAnvil(t, NewBuilder().WithFork(url).WithForkBlockNumber(forkBlock))
 
 	ctx := t.Context()
 	block, err := anvil.Client().BlockNumber(ctx)
