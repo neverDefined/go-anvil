@@ -36,7 +36,7 @@ func requireAnvil(tb testing.TB) {
 }
 
 // startAnvil builds and starts an instance and closes it when the test ends.
-func startAnvil(tb testing.TB, b *AnvilBuilder) *Anvil {
+func startAnvil(tb testing.TB, b *Builder) *Anvil {
 	tb.Helper()
 	requireAnvil(tb)
 	a, err := b.Build()
@@ -44,6 +44,14 @@ func startAnvil(tb testing.TB, b *AnvilBuilder) *Anvil {
 	require.NoError(tb, a.Start())
 	tb.Cleanup(func() { _ = a.Close() })
 	return a
+}
+
+// waitForEmptyPool calls WaitForMemPoolEmpty with a deadline.
+func waitForEmptyPool(t *testing.T, a *Anvil, timeout time.Duration) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+	return a.WaitForMemPoolEmpty(ctx)
 }
 
 func addresses(a *Anvil) []common.Address {
@@ -119,7 +127,7 @@ var (
 func TestBuilderOptions(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder().
+	a := startAnvil(t, NewBuilder().
 		WithChainID(1337).
 		WithGasLimit(12_000_000))
 
@@ -132,7 +140,7 @@ func TestBuilderOptions(t *testing.T) {
 
 func TestWithArgs(t *testing.T) {
 	t.Parallel()
-	a := startAnvil(t, NewAnvilBuilder().WithArgs("--hardfork", "berlin", "--gas-price", "20000000000"))
+	a := startAnvil(t, NewBuilder().WithArgs("--hardfork", "berlin", "--gas-price", "20000000000"))
 
 	// anvil only uses --gas-price before the London hardfork.
 	gasPrice, err := a.Client().SuggestGasPrice(t.Context())
@@ -142,7 +150,7 @@ func TestWithArgs(t *testing.T) {
 
 func TestBlockTime(t *testing.T) {
 	t.Parallel()
-	a := startAnvil(t, NewAnvilBuilder().WithBlockTime(200*time.Millisecond))
+	a := startAnvil(t, NewBuilder().WithBlockTime(200*time.Millisecond))
 
 	// Blocks arrive without MineBlock.
 	require.NoError(t, waitForBlock(t, a, 2, 5*time.Second))
@@ -150,7 +158,7 @@ func TestBlockTime(t *testing.T) {
 
 func TestAccounts(t *testing.T) {
 	t.Parallel()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	var want []common.Address
 	require.NoError(t, a.RPCClient().CallContext(t.Context(), &want, "eth_accounts"))
@@ -166,7 +174,7 @@ func TestAccounts(t *testing.T) {
 func TestMineBlock(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	require.NoError(t, a.MineBlock(ctx))
 	require.NoError(t, a.MineBlock(ctx))
@@ -178,7 +186,7 @@ func TestMine(t *testing.T) {
 
 	t.Run("mines n blocks", func(t *testing.T) {
 		t.Parallel()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		require.NoError(t, a.Mine(t.Context(), 5, 0))
 		assert.Equal(t, uint64(5), head(t, a).Number.Uint64())
@@ -188,7 +196,7 @@ func TestMine(t *testing.T) {
 	t.Run("interval spaces block timestamps", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		start := head(t, a)
 
 		const interval = 100
@@ -215,7 +223,7 @@ func TestTime(t *testing.T) {
 	t.Run("SetNextBlockTimestamp sets the next block's time", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		next := head(t, a).Time + 1000
 		require.NoError(t, a.SetNextBlockTimestamp(ctx, int64(next)))
@@ -226,7 +234,7 @@ func TestTime(t *testing.T) {
 	t.Run("IncreaseTime moves the clock forward", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		before := head(t, a).Time
 		require.NoError(t, a.IncreaseTime(ctx, 3600))
@@ -240,7 +248,7 @@ func TestTime(t *testing.T) {
 
 func TestSetBalance(t *testing.T) {
 	t.Parallel()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	require.NoError(t, a.SetBalance(t.Context(), stranger, big.NewInt(123456789)))
 	assert.Equal(t, big.NewInt(123456789), balanceOf(t, a, stranger))
@@ -249,7 +257,7 @@ func TestSetBalance(t *testing.T) {
 func TestSetNonce(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	require.NoError(t, a.SetNonce(ctx, stranger, 42))
 	nonce, err := a.Client().NonceAt(ctx, stranger, nil)
@@ -260,7 +268,7 @@ func TestSetNonce(t *testing.T) {
 func TestSetCode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	code := hexutil.MustDecode("0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe")
 	require.NoError(t, a.SetCode(ctx, stranger, code))
@@ -273,7 +281,7 @@ func TestSetCode(t *testing.T) {
 func TestSetStorageAt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	slot := common.HexToHash("0x1")
 	value := common.HexToHash("0x2a")
@@ -287,7 +295,7 @@ func TestSetStorageAt(t *testing.T) {
 func TestImpersonate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	require.NoError(t, a.SetBalance(ctx, stranger, big.NewInt(1e18)))
 
 	_, err := sendTx(ctx, a, stranger, recipient, 1000)
@@ -307,7 +315,7 @@ func TestImpersonate(t *testing.T) {
 func TestAutoImpersonate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	require.NoError(t, a.SetBalance(ctx, stranger, big.NewInt(1e18)))
 
 	require.NoError(t, a.AutoImpersonate(ctx, true))
@@ -324,7 +332,7 @@ func TestAutoImpersonate(t *testing.T) {
 func TestSetAutomine(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	addrs := addresses(a)
 
 	require.NoError(t, a.SetAutomine(ctx, false))
@@ -347,7 +355,7 @@ func TestSetAutomine(t *testing.T) {
 func TestSetIntervalMining(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	require.NoError(t, a.SetIntervalMining(ctx, 1))
 	require.NoError(t, waitForBlock(t, a, 1, 5*time.Second))
@@ -361,7 +369,7 @@ func TestSetIntervalMining(t *testing.T) {
 func TestDropTransaction(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	addrs := addresses(a)
 
 	require.NoError(t, a.SetAutomine(ctx, false))
@@ -387,7 +395,7 @@ func TestDropTransaction(t *testing.T) {
 func TestSnapshotRevert(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	id, err := a.Snapshot(ctx)
 	require.NoError(t, err)
@@ -422,7 +430,7 @@ func TestResetState(t *testing.T) {
 	t.Run("first call returns to the state after Start", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		addrs := addresses(a)
 		funded := balanceOf(t, a, addrs[0])
 
@@ -437,7 +445,7 @@ func TestResetState(t *testing.T) {
 	t.Run("can be called repeatedly", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		for range 3 {
 			require.NoError(t, a.MineBlock(ctx))
@@ -450,7 +458,7 @@ func TestResetState(t *testing.T) {
 	t.Run("concurrent calls all succeed", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		require.NoError(t, a.Mine(ctx, 3, 0))
 
 		errs := make([]error, 8)
@@ -468,7 +476,7 @@ func TestResetState(t *testing.T) {
 	t.Run("a baseline consumed by a direct Revert is reported", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		ok, err := a.Revert(ctx, a.baseline)
 		require.NoError(t, err)
@@ -481,17 +489,17 @@ func TestResetState(t *testing.T) {
 func TestGetProof(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	addrs := addresses(a)
 
-	slot := "0x0000000000000000000000000000000000000000000000000000000000000001"
-	require.NoError(t, a.SetStorageAt(ctx, addrs[0], common.HexToHash(slot), common.HexToHash("0x2a")))
+	slot := common.HexToHash("0x1")
+	require.NoError(t, a.SetStorageAt(ctx, addrs[0], slot, common.HexToHash("0x2a")))
 	// Mine so the head block's state root includes the storage write.
 	require.NoError(t, a.MineBlock(ctx))
 
 	// Pin the block so the proof and the header describe the same state.
 	header := head(t, a)
-	proof, err := a.GetProof(ctx, addrs[0], []string{slot}, header.Number)
+	proof, err := a.GetProof(ctx, addrs[0], []common.Hash{slot}, header.Number)
 	require.NoError(t, err)
 
 	assert.Equal(t, addrs[0], proof.Address)
@@ -511,7 +519,7 @@ func TestGetProof(t *testing.T) {
 
 	// Regression: a zero-valued slot on an account with an empty storage trie
 	// (any EOA) must verify as an absence proof.
-	emptyProof, err := a.GetProof(ctx, addrs[1], []string{slot}, header.Number)
+	emptyProof, err := a.GetProof(ctx, addrs[1], []common.Hash{slot}, header.Number)
 	require.NoError(t, err)
 	assert.Equal(t, types.EmptyRootHash, emptyProof.StorageHash)
 	require.NoError(t, VerifyProof(header.Root, emptyProof))
@@ -520,7 +528,7 @@ func TestGetProof(t *testing.T) {
 func TestWaitForBlock(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 
 	require.NoError(t, a.Mine(ctx, 3, 0))
 	require.NoError(t, waitForBlock(t, a, 3, time.Second))
@@ -532,39 +540,39 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 
 	t.Run("returns for an idle pool", func(t *testing.T) {
 		t.Parallel()
-		a := startAnvil(t, NewAnvilBuilder())
-		require.NoError(t, a.WaitForMemPoolEmpty(t.Context(), time.Second))
+		a := startAnvil(t, NewBuilder())
+		require.NoError(t, waitForEmptyPool(t, a, time.Second))
 	})
 
 	t.Run("returns ctx's error", func(t *testing.T) {
 		t.Parallel()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx, time.Second), context.Canceled)
+		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx), context.Canceled)
 	})
 
 	t.Run("counts pending transactions", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		require.NoError(t, a.SetAutomine(ctx, false))
 		addrs := addresses(a)
 
 		_, err := sendTx(ctx, a, addrs[0], addrs[1], 1)
 		require.NoError(t, err)
 
-		err = a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
+		err = waitForEmptyPool(t, a, 300*time.Millisecond)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		require.NoError(t, a.MineBlock(ctx))
-		require.NoError(t, a.WaitForMemPoolEmpty(ctx, time.Second))
+		require.NoError(t, waitForEmptyPool(t, a, time.Second))
 	})
 
 	t.Run("counts queued transactions", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		require.NoError(t, a.SetAutomine(ctx, false))
 		addrs := addresses(a)
 
@@ -581,7 +589,7 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 		// A nonce ahead of the account's next nonce leaves the transaction
 		// queued, not pending, so a pending-only count would see an empty pool.
 		send(5)
-		err := a.WaitForMemPoolEmpty(ctx, 300*time.Millisecond)
+		err := waitForEmptyPool(t, a, 300*time.Millisecond)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		// Filling the nonce gap makes it mineable. (DropTransaction can't clear
@@ -590,7 +598,7 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 			send(nonce)
 		}
 		require.NoError(t, a.MineBlock(ctx))
-		require.NoError(t, a.WaitForMemPoolEmpty(ctx, time.Second))
+		require.NoError(t, waitForEmptyPool(t, a, time.Second))
 	})
 }
 
@@ -599,7 +607,7 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 func TestConcurrentCalls(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	a := startAnvil(t, NewAnvilBuilder())
+	a := startAnvil(t, NewBuilder())
 	addrs := addresses(a)
 
 	deadline := time.Now().Add(300 * time.Millisecond)

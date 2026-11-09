@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `SetCode` takes `[]byte`, and `SetStorageAt` takes a `common.Hash` slot and value.
 - **Breaking:** `DropTransaction` takes a `common.Hash` and also returns whether anvil dropped anything.
 - **Breaking:** `Snapshot` and `Revert` use a `SnapshotID` type (#63).
+- **Breaking:** `New`, `NewBuilder` and `Builder` replace `NewAnvil`, `NewAnvilBuilder` and `AnvilBuilder`, so callers write `anvil.New()` instead of `anvil.NewAnvil()`.
+- **Breaking:** `WaitForMemPoolEmpty(ctx)` no longer takes a timeout. Put a deadline on `ctx`.
+- **Breaking:** `GetProof` takes storage keys as `[]common.Hash` instead of hex strings.
 - **Breaking:** `WaitForBlock(ctx, number)` replaces `WaitForBlock(number, timeout)`. Put a deadline on `ctx`. It now checks before its first 100ms tick.
 - **Breaking:** `Accounts()` returns all ten default accounts as `[]Account` and no longer returns an error (#62):
 
@@ -46,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read: use `WithLogger`, and `WithPort` plus `URL()` for the endpoint.
 - `ErrProcessNotFound` and `ErrRPCCallFailed`, which nothing returned.
-- `MemPoolEmpty(ctx, client)`, deprecated in 0.1.0. Use `(*Anvil).WaitForMemPoolEmpty(ctx, timeout)` (#61).
+- `MemPoolEmpty(ctx, client)`, deprecated in 0.1.0. Use `(*Anvil).WaitForMemPoolEmpty(ctx)` (#61).
 - `Metrics()` and `AnvilMetrics`. `LastError` was never set, and the block count included failed calls but not automined or interval blocks.
 - `WithGasPrice`. It had no effect on anvil's default hardfork. Use `WithArgs("--gas-price", "...")` with a pre-London `--hardfork`.
 - `AnvilPrivateKey` and `AnvilPrivateKeys`. Use `Accounts()`; `hex.EncodeToString(crypto.FromECDSA(account.Key))` gives the hex form.

@@ -41,7 +41,7 @@ If arguments are missing, ask the user for:
    func Test<MethodName>(t *testing.T) {
        t.Parallel()
        ctx := t.Context()
-       a := startAnvil(t, NewAnvilBuilder())
+       a := startAnvil(t, NewBuilder())
 
        require.NoError(t, a.<MethodName>(ctx, <test-args>))
        // read the state back through a.Client() and assert on it

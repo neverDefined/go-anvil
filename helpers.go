@@ -151,19 +151,13 @@ func parseStorageKey(key string) ([]byte, error) {
 // WaitForMemPoolEmpty waits until the transaction pool holds no pending and no
 // queued transactions (txpool_status). Queued transactions are ones that cannot
 // be mined yet, for example because of a nonce gap. It checks immediately, then
-// every 100ms, until the pool is empty, ctx is canceled, or the timeout expires —
-// whichever comes first. A zero or negative timeout means "use ctx's deadline only."
-// Returns an error if the timeout is exceeded, ctx is canceled, or the query fails.
-func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context, timeout time.Duration) error {
-	// Check the lifecycle first so ErrNotStarted isn't masked by an expired timeout.
+// every 100ms, until the pool is empty or ctx is done, so pass a ctx with a
+// deadline to bound the wait.
+// Returns an error if ctx is done first or if the query fails.
+func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context) error {
+	// Check the lifecycle first so ErrNotStarted isn't masked by a finished ctx.
 	if _, err := a.running(); err != nil {
 		return err
-	}
-
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
 	}
 
 	ticker := time.NewTicker(pollInterval)

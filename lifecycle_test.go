@@ -24,8 +24,8 @@ func TestLifecycle(t *testing.T) {
 	t.Run("default port is picked by anvil and reported by URL", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a := startAnvil(t, NewAnvilBuilder())
-		b := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
+		b := startAnvil(t, NewBuilder())
 		require.NotEqual(t, a.URL(), b.URL())
 
 		require.NoError(t, a.MineBlock(ctx))
@@ -39,13 +39,13 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("fixed port already in use fails instead of attaching to the other node", func(t *testing.T) {
 		t.Parallel()
-		owner := startAnvil(t, NewAnvilBuilder())
+		owner := startAnvil(t, NewBuilder())
 		u, err := url.Parse(owner.URL())
 		require.NoError(t, err)
 		port, err := strconv.Atoi(u.Port())
 		require.NoError(t, err)
 
-		a, err := NewAnvilBuilder().WithPort(port).Build()
+		a, err := NewBuilder().WithPort(port).Build()
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = a.Close() })
 
@@ -57,7 +57,7 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("invalid flag fails fast with anvil's own error", func(t *testing.T) {
 		t.Parallel()
-		a, err := NewAnvilBuilder().
+		a, err := NewBuilder().
 			WithArgs("--block-time", "not-a-number").
 			WithStartupTimeout(30 * time.Second).
 			Build()
@@ -77,7 +77,7 @@ func TestLifecycle(t *testing.T) {
 	t.Run("calls outside the started lifetime return ErrNotStarted", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
-		a, err := NewAnvilBuilder().Build()
+		a, err := NewBuilder().Build()
 		require.NoError(t, err)
 
 		require.ErrorIs(t, a.MineBlock(ctx), ErrNotStarted)
@@ -85,7 +85,7 @@ func TestLifecycle(t *testing.T) {
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
 		require.ErrorIs(t, a.WaitForBlock(canceled, 1), ErrNotStarted, "a finished ctx must not mask it")
-		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx, time.Millisecond), ErrNotStarted)
+		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx), ErrNotStarted)
 
 		require.NoError(t, a.Start())
 		require.NoError(t, a.Close())
@@ -100,7 +100,7 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("Start is single-use", func(t *testing.T) {
 		t.Parallel()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 		require.ErrorIs(t, a.Start(), ErrAlreadyStarted)
 		require.NoError(t, a.Close())
 		require.ErrorIs(t, a.Start(), ErrAlreadyStarted)
@@ -108,7 +108,7 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("Close returns promptly and is idempotent", func(t *testing.T) {
 		t.Parallel()
-		a := startAnvil(t, NewAnvilBuilder())
+		a := startAnvil(t, NewBuilder())
 
 		start := time.Now()
 		require.NoError(t, a.Close())
@@ -120,7 +120,7 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("startup timeout returns ErrStartupTimeout", func(t *testing.T) {
 		t.Parallel()
-		a, err := NewAnvilBuilder().WithStartupTimeout(time.Millisecond).Build()
+		a, err := NewBuilder().WithStartupTimeout(time.Millisecond).Build()
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = a.Close() })
 
@@ -132,13 +132,13 @@ func TestLifecycle(t *testing.T) {
 		var out bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-		a := startAnvil(t, NewAnvilBuilder().WithLogger(logger))
+		a := startAnvil(t, NewBuilder().WithLogger(logger))
 		require.NoError(t, a.Close()) // the process has been reaped, so out is final
 		assert.Contains(t, out.String(), "Listening on")
 		assert.Contains(t, out.String(), "stream=stdout")
 
 		out.Reset()
-		a, err := NewAnvilBuilder().WithLogger(logger).WithArgs("--no-such-flag").Build()
+		a, err := NewBuilder().WithLogger(logger).WithArgs("--no-such-flag").Build()
 		require.NoError(t, err)
 		require.ErrorIs(t, a.Start(), ErrProcessExited)
 		assert.Contains(t, out.String(), "level=WARN")
@@ -154,7 +154,7 @@ func TestFixedPort(t *testing.T) {
 	port := l.Addr().(*net.TCPAddr).Port
 	require.NoError(t, l.Close())
 
-	a := startAnvil(t, NewAnvilBuilder().WithPort(port))
+	a := startAnvil(t, NewBuilder().WithPort(port))
 	assert.Equal(t, "http://127.0.0.1:"+strconv.Itoa(port), a.URL())
 	_, err = a.Client().BlockNumber(t.Context())
 	require.NoError(t, err)

@@ -38,26 +38,26 @@ import (
 // Builder validation
 // -----------------------------------------------------------------------------
 
-func TestAnvilBuilder_validate(t *testing.T) {
+func TestBuilder_validate(t *testing.T) {
 	cases := []struct {
 		name    string
-		builder *AnvilBuilder
+		builder *Builder
 		wantErr bool
 	}{
-		{"default builder is valid (anvil picks the port)", NewAnvilBuilder(), false},
-		{"fixed port is valid", NewAnvilBuilder().WithPort(8545), false},
-		{"negative port fails", NewAnvilBuilder().WithPort(-1), true},
-		{"out-of-range port fails", NewAnvilBuilder().WithPort(70000), true},
-		{"negative block time fails", NewAnvilBuilder().WithBlockTime(-time.Second), true},
-		{"fork block without a fork URL fails", NewAnvilBuilder().WithForkBlockNumber(5), true},
-		{"fork block with a fork URL is valid", NewAnvilBuilder().WithFork("https://example.org").WithForkBlockNumber(5), false},
-		{"other extra flags are valid", NewAnvilBuilder().WithArgs("--hardfork", "cancun"), false},
-		{"--silent would hide the listening line", NewAnvilBuilder().WithArgs("--silent"), true},
-		{"--quiet would hide the listening line", NewAnvilBuilder().WithArgs("--quiet"), true},
-		{"-q would hide the listening line", NewAnvilBuilder().WithArgs("-q"), true},
-		{"--port conflicts with WithPort", NewAnvilBuilder().WithArgs("--port", "9000"), true},
-		{"--port=N conflicts with WithPort", NewAnvilBuilder().WithArgs("--port=9000"), true},
-		{"-p conflicts with WithPort", NewAnvilBuilder().WithArgs("-p", "9000"), true},
+		{"default builder is valid (anvil picks the port)", NewBuilder(), false},
+		{"fixed port is valid", NewBuilder().WithPort(8545), false},
+		{"negative port fails", NewBuilder().WithPort(-1), true},
+		{"out-of-range port fails", NewBuilder().WithPort(70000), true},
+		{"negative block time fails", NewBuilder().WithBlockTime(-time.Second), true},
+		{"fork block without a fork URL fails", NewBuilder().WithForkBlockNumber(5), true},
+		{"fork block with a fork URL is valid", NewBuilder().WithFork("https://example.org").WithForkBlockNumber(5), false},
+		{"other extra flags are valid", NewBuilder().WithArgs("--hardfork", "cancun"), false},
+		{"--silent would hide the listening line", NewBuilder().WithArgs("--silent"), true},
+		{"--quiet would hide the listening line", NewBuilder().WithArgs("--quiet"), true},
+		{"-q would hide the listening line", NewBuilder().WithArgs("-q"), true},
+		{"--port conflicts with WithPort", NewBuilder().WithArgs("--port", "9000"), true},
+		{"--port=N conflicts with WithPort", NewBuilder().WithArgs("--port=9000"), true},
+		{"-p conflicts with WithPort", NewBuilder().WithArgs("-p", "9000"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,12 +71,12 @@ func TestAnvilBuilder_validate(t *testing.T) {
 	}
 }
 
-func TestAnvilBuilder_args(t *testing.T) {
-	a, err := NewAnvilBuilder().Build()
+func TestBuilder_args(t *testing.T) {
+	a, err := NewBuilder().Build()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--port", "0"}, a.args, "anvil picks the port by default")
 
-	a, err = NewAnvilBuilder().
+	a, err = NewBuilder().
 		WithBlockTime(1500*time.Millisecond).
 		WithChainID(1337).
 		WithGasLimit(12_000_000).
@@ -97,20 +97,20 @@ func TestAnvilBuilder_args(t *testing.T) {
 	}, a.args)
 }
 
-func TestAnvilBuilder_settingTwiceKeepsTheLastValue(t *testing.T) {
-	a, err := NewAnvilBuilder().WithChainID(1).WithChainID(2).Build()
+func TestBuilder_settingTwiceKeepsTheLastValue(t *testing.T) {
+	a, err := NewBuilder().WithChainID(1).WithChainID(2).Build()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--port", "0", "--chain-id", "2"}, a.args)
 }
 
-func TestAnvilBuilder_explicitZeroIsPassed(t *testing.T) {
-	a, err := NewAnvilBuilder().WithChainID(0).WithGasLimit(0).Build()
+func TestBuilder_explicitZeroIsPassed(t *testing.T) {
+	a, err := NewBuilder().WithChainID(0).WithGasLimit(0).Build()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--port", "0", "--chain-id", "0", "--gas-limit", "0"}, a.args)
 }
 
-func TestAnvilBuilder_WithArgsAccumulates(t *testing.T) {
-	a, err := NewAnvilBuilder().WithArgs("--hardfork", "cancun").WithArgs("--no-mining").Build()
+func TestBuilder_WithArgsAccumulates(t *testing.T) {
+	a, err := NewBuilder().WithArgs("--hardfork", "cancun").WithArgs("--no-mining").Build()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--port", "0", "--hardfork", "cancun", "--no-mining"}, a.args)
 }
@@ -126,7 +126,7 @@ func TestStartupTimeoutIncludesStderr(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "anvil"), []byte(script), 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	a, err := NewAnvilBuilder().WithStartupTimeout(500 * time.Millisecond).Build()
+	a, err := NewBuilder().WithStartupTimeout(500 * time.Millisecond).Build()
 	require.NoError(t, err)
 
 	err = a.Start()
@@ -145,29 +145,29 @@ func TestAccounts_defaults(t *testing.T) {
 	assert.NotEqual(t, Account{}, a.Accounts()[0], "callers get their own copy")
 }
 
-func TestAnvilBuilder_WithStartupTimeout(t *testing.T) {
+func TestBuilder_WithStartupTimeout(t *testing.T) {
 	t.Run("positive duration wins", func(t *testing.T) {
-		b := NewAnvilBuilder().WithStartupTimeout(7 * time.Second)
+		b := NewBuilder().WithStartupTimeout(7 * time.Second)
 		assert.Equal(t, 7*time.Second, b.startupTimeout)
 	})
 	t.Run("zero is ignored (keeps default)", func(t *testing.T) {
-		b := NewAnvilBuilder().WithStartupTimeout(0)
+		b := NewBuilder().WithStartupTimeout(0)
 		assert.Equal(t, DefaultStartupTimeout, b.startupTimeout)
 	})
 	t.Run("negative is ignored (keeps default)", func(t *testing.T) {
-		b := NewAnvilBuilder().WithStartupTimeout(-time.Second)
+		b := NewBuilder().WithStartupTimeout(-time.Second)
 		assert.Equal(t, DefaultStartupTimeout, b.startupTimeout)
 	})
 }
 
-func TestAnvilBuilder_ZeroValueUsesDefaultStartupTimeout(t *testing.T) {
-	a, err := (&AnvilBuilder{}).Build()
+func TestBuilder_ZeroValueUsesDefaultStartupTimeout(t *testing.T) {
+	a, err := (&Builder{}).Build()
 	require.NoError(t, err)
 	assert.Equal(t, DefaultStartupTimeout, a.startupTimeout)
 }
 
-func TestAnvilBuilder_BuildPropagatesStartupTimeout(t *testing.T) {
-	a, err := NewAnvilBuilder().WithStartupTimeout(123 * time.Millisecond).Build()
+func TestBuilder_BuildPropagatesStartupTimeout(t *testing.T) {
+	a, err := NewBuilder().WithStartupTimeout(123 * time.Millisecond).Build()
 	require.NoError(t, err)
 	assert.Equal(t, 123*time.Millisecond, a.startupTimeout)
 }
@@ -430,13 +430,13 @@ func TestRPCWrappers(t *testing.T) {
 		{"GetProof", func(ctx context.Context, x *Anvil) error { _, err := x.GetProof(ctx, addr, nil, nil); return err },
 			calls("eth_getProof", `[`+a+`,[],"latest"]`)},
 		{"GetProof at a block", func(ctx context.Context, x *Anvil) error {
-			_, err := x.GetProof(ctx, addr, []string{"0x1"}, big.NewInt(5))
+			_, err := x.GetProof(ctx, addr, []common.Hash{common.HexToHash("0x1")}, big.NewInt(5))
 			return err
-		}, calls("eth_getProof", `[`+a+`,["0x1"],"0x5"]`)},
+		}, calls("eth_getProof", `[`+a+`,["`+common.HexToHash("0x1").Hex()+`"],"0x5"]`)},
 		// evm_revert consumes the snapshot, so ResetState takes a new one.
 		{"ResetState", func(ctx context.Context, x *Anvil) error { x.baseline = "0x1"; return x.ResetState(ctx) },
 			calls("evm_revert", `["0x1"]`, "evm_snapshot", `[]`)},
-		{"WaitForMemPoolEmpty", func(ctx context.Context, x *Anvil) error { return x.WaitForMemPoolEmpty(ctx, time.Second) },
+		{"WaitForMemPoolEmpty", func(ctx context.Context, x *Anvil) error { return x.WaitForMemPoolEmpty(ctx) },
 			calls("txpool_status", `[]`)},
 		{"WaitForBlock", func(ctx context.Context, x *Anvil) error { return x.WaitForBlock(ctx, 5) },
 			calls("eth_blockNumber", `[]`)},

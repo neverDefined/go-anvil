@@ -7,7 +7,7 @@ import (
 )
 
 func BenchmarkMineBlock(b *testing.B) {
-	anvil := startAnvil(b, NewAnvilBuilder())
+	anvil := startAnvil(b, NewBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -18,7 +18,7 @@ func BenchmarkMineBlock(b *testing.B) {
 }
 
 func BenchmarkSetBalance(b *testing.B) {
-	anvil := startAnvil(b, NewAnvilBuilder())
+	anvil := startAnvil(b, NewBuilder())
 	ctx := context.Background()
 	addr := anvil.Accounts()[0].Address
 	bal := big.NewInt(1)
@@ -31,7 +31,7 @@ func BenchmarkSetBalance(b *testing.B) {
 }
 
 func BenchmarkSnapshotRevertCycle(b *testing.B) {
-	anvil := startAnvil(b, NewAnvilBuilder())
+	anvil := startAnvil(b, NewBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -48,7 +48,7 @@ func BenchmarkSnapshotRevertCycle(b *testing.B) {
 // BenchmarkResetState measures one ResetState: a revert to the baseline taken
 // in Start plus a fresh snapshot.
 func BenchmarkResetState(b *testing.B) {
-	anvil := startAnvil(b, NewAnvilBuilder())
+	anvil := startAnvil(b, NewBuilder())
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

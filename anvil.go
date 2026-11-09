@@ -138,11 +138,11 @@ type Anvil struct {
 	baseline   SnapshotID
 }
 
-// NewAnvil creates a new Anvil instance with default configuration.
+// New creates a new Anvil instance with default configuration.
 // Anvil picks a free port when started; URL reports the address.
 // Returns an error if the configuration is invalid.
-func NewAnvil() (*Anvil, error) {
-	return NewAnvilBuilder().Build()
+func New() (*Anvil, error) {
+	return NewBuilder().Build()
 }
 
 // Start launches the anvil process and waits until its RPC endpoint answers.
@@ -545,14 +545,14 @@ type StorageResult struct {
 }
 
 // GetProof returns the EIP-1186 account and storage proofs for the given address.
-// The storageKeys are hex-encoded storage slot keys; pass nil for an account-only proof.
+// Pass nil storageKeys for an account-only proof.
 // A nil blockNumber means the latest block; pin a specific block when the proof must
 // be checked against that block's state root. Use VerifyProof to check the result
 // against a header's state root.
 // Returns an error if the RPC call fails or if ctx is canceled.
-func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNumber *big.Int) (*AccountResult, error) {
+func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKeys []common.Hash, blockNumber *big.Int) (*AccountResult, error) {
 	if storageKeys == nil {
-		storageKeys = []string{}
+		storageKeys = []common.Hash{}
 	}
 	var result AccountResult
 	if err := a.call(ctx, &result, "eth_getProof", address, storageKeys, toBlockNumArg(blockNumber)); err != nil {
@@ -766,9 +766,9 @@ func (a *Anvil) WaitForBlock(ctx context.Context, number uint64) error {
 	}
 }
 
-// AnvilBuilder helps construct Anvil instances using the builder pattern.
+// Builder helps construct Anvil instances using the builder pattern.
 // It allows for flexible configuration of Anvil options before creating the instance.
-type AnvilBuilder struct {
+type Builder struct {
 	port           int
 	blockTime      time.Duration
 	chainID        *uint64
@@ -780,30 +780,30 @@ type AnvilBuilder struct {
 	logger         *slog.Logger
 }
 
-// NewAnvilBuilder creates a new AnvilBuilder with default configuration.
+// NewBuilder creates a new Builder with default configuration.
 // Use the With* methods to customize the configuration before calling Build().
-func NewAnvilBuilder() *AnvilBuilder {
-	return &AnvilBuilder{startupTimeout: DefaultStartupTimeout}
+func NewBuilder() *Builder {
+	return &Builder{startupTimeout: DefaultStartupTimeout}
 }
 
 // WithBlockTime makes anvil mine a block every d instead of one per transaction.
 // Fractions of a second work. Zero, the default, leaves automine on.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithBlockTime(d time.Duration) *AnvilBuilder {
+func (b *Builder) WithBlockTime(d time.Duration) *Builder {
 	b.blockTime = d
 	return b
 }
 
 // WithFork configures Anvil to fork from a remote Ethereum node at the latest block.
 // Provide the RPC URL of the node to fork from. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithFork(url string) *AnvilBuilder {
+func (b *Builder) WithFork(url string) *Builder {
 	b.forkURL = url
 	return b
 }
 
 // WithForkBlockNumber sets the block number to fork from. It requires WithFork.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithForkBlockNumber(number uint64) *AnvilBuilder {
+func (b *Builder) WithForkBlockNumber(number uint64) *Builder {
 	b.forkBlock = &number
 	return b
 }
@@ -812,21 +812,21 @@ func (b *AnvilBuilder) WithForkBlockNumber(number uint64) *AnvilBuilder {
 // a free port, which keeps parallel tests and test binaries from colliding; use
 // URL to find it. With a fixed port, Start returns ErrProcessExited if the port
 // is already in use. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithPort(port int) *AnvilBuilder {
+func (b *Builder) WithPort(port int) *Builder {
 	b.port = port
 	return b
 }
 
 // WithChainID sets the chain ID for the Anvil instance.
 // Default is 31337. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithChainID(id uint64) *AnvilBuilder {
+func (b *Builder) WithChainID(id uint64) *Builder {
 	b.chainID = &id
 	return b
 }
 
 // WithGasLimit sets the block gas limit for the Anvil instance.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithGasLimit(limit uint64) *AnvilBuilder {
+func (b *Builder) WithGasLimit(limit uint64) *Builder {
 	b.gasLimit = &limit
 	return b
 }
@@ -841,7 +841,7 @@ func (b *AnvilBuilder) WithGasLimit(limit uint64) *AnvilBuilder {
 // that act on a clean exit, such as --dump-state, don't take effect.
 // Calling WithArgs again adds to the earlier flags.
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithArgs(args ...string) *AnvilBuilder {
+func (b *Builder) WithArgs(args ...string) *Builder {
 	b.extraArgs = append(b.extraArgs, args...)
 	return b
 }
@@ -850,7 +850,7 @@ func (b *AnvilBuilder) WithArgs(args ...string) *AnvilBuilder {
 // stderr at Warn. A nil logger, the default, discards it. The handler runs on
 // the goroutine that reads anvil's output, so it must not block, or Stop will
 // hang. Returns the builder for method chaining.
-func (b *AnvilBuilder) WithLogger(logger *slog.Logger) *AnvilBuilder {
+func (b *Builder) WithLogger(logger *slog.Logger) *Builder {
 	b.logger = logger
 	return b
 }
@@ -860,7 +860,7 @@ func (b *AnvilBuilder) WithLogger(logger *slog.Logger) *AnvilBuilder {
 // takes tens of milliseconds, so the timeout only matters when something is wrong.
 // A zero or negative value leaves the default (DefaultStartupTimeout).
 // Returns the builder for method chaining.
-func (b *AnvilBuilder) WithStartupTimeout(d time.Duration) *AnvilBuilder {
+func (b *Builder) WithStartupTimeout(d time.Duration) *Builder {
 	if d > 0 {
 		b.startupTimeout = d
 	}
@@ -868,7 +868,7 @@ func (b *AnvilBuilder) WithStartupTimeout(d time.Duration) *AnvilBuilder {
 }
 
 // validate checks the builder configuration
-func (b *AnvilBuilder) validate() error {
+func (b *Builder) validate() error {
 	if b.port < 0 || b.port > 65535 {
 		return fmt.Errorf("port %d is not in the range 0 to 65535", b.port)
 	}
@@ -890,7 +890,7 @@ func (b *AnvilBuilder) validate() error {
 }
 
 // renderArgs builds anvil's command line. Port 0 asks anvil for a free port.
-func (b *AnvilBuilder) renderArgs() []string {
+func (b *Builder) renderArgs() []string {
 	args := []string{"--port", strconv.Itoa(b.port)}
 	if b.blockTime > 0 {
 		args = append(args, "--block-time", strconv.FormatFloat(b.blockTime.Seconds(), 'f', -1, 64))
@@ -913,14 +913,14 @@ func (b *AnvilBuilder) renderArgs() []string {
 // Build creates an Anvil instance with the configured options.
 // Returns an error wrapping ErrInvalidConfig if the configuration is invalid.
 // The instance must be started with Start() before it can be used.
-func (b *AnvilBuilder) Build() (*Anvil, error) {
+func (b *Builder) Build() (*Anvil, error) {
 	if err := b.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
 	timeout := b.startupTimeout
 	if timeout <= 0 {
-		timeout = DefaultStartupTimeout // e.g. a zero-value AnvilBuilder
+		timeout = DefaultStartupTimeout // e.g. a zero-value Builder
 	}
 	logger := b.logger
 	if logger == nil {
