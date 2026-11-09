@@ -2,229 +2,143 @@
 
 [![CI](https://github.com/neverDefined/go-anvil/workflows/CI/badge.svg)](https://github.com/neverDefined/go-anvil/actions)
 [![codecov](https://codecov.io/gh/neverDefined/go-anvil/branch/main/graph/badge.svg)](https://codecov.io/gh/neverDefined/go-anvil)
-[![Go Report Card](https://goreportcard.com/badge/github.com/neverDefined/go-anvil)](https://goreportcard.com/report/github.com/neverDefined/go-anvil)
+[![Go Reference](https://pkg.go.dev/badge/github.com/neverDefined/go-anvil.svg)](https://pkg.go.dev/github.com/neverDefined/go-anvil)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Go client library for programmatic control of [Anvil](https://book.getfoundry.sh/anvil/), Foundry's local Ethereum test node. Provides a clean interface for managing test environments, manipulating blockchain state, and controlling time and accounts during development.
+go-anvil runs [anvil](https://book.getfoundry.sh/anvil/), Foundry's local Ethereum node, from Go. Tests get a real chain they can control: mine blocks, move the clock, set balances, impersonate accounts or fork a live network.
 
-## Features
-
-- Full programmatic control over Anvil nodes
-- Builder pattern for flexible configuration
-- Chain manipulation (mining, time travel, snapshots)
-- Account management and impersonation
-- Fast state reset using RPC calls
-- Comprehensive test coverage
-
-## Installation
+## Install
 
 ```bash
 go get github.com/neverDefined/go-anvil
 ```
 
-**Prerequisites:**
-- [Foundry](https://book.getfoundry.sh/) must be installed on your system
-- Go 1.25 or later
+You need Go 1.25 or later and [Foundry](https://book.getfoundry.sh/getting-started/installation), with `anvil` on your `PATH` or in Foundry's install directory (`~/.foundry/bin` by default). CI runs against Foundry 1.9.0.
 
-## Quick Start
+## Use it in a test
+
+`NewT` starts a node and stops it when the test ends. Each node picks its own port, so tests can run in parallel. A node starts in about 50 ms.
 
 ```go
-package main
+func TestTransfer(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	node := anvil.NewT(t, nil)
 
-import (
-    "context"
-    "log"
+	from := node.Accounts()[0].Address
+	to := common.HexToAddress("0xb0b")
 
-    "github.com/neverDefined/go-anvil"
-)
+	_, err := node.SendTransaction(ctx, anvil.TxArgs{From: from, To: &to, Value: big.NewInt(1000)})
+	require.NoError(t, err)
+	require.NoError(t, node.WaitForMemPoolEmpty(ctx))
 
-func main() {
-    ctx := context.Background()
-
-    // Create and start an Anvil instance
-    anvil, err := anvil.New()
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    if err := anvil.Start(); err != nil {
-        log.Fatal(err)
-    }
-    defer anvil.Close()
-
-    // Query the chain via the Ethereum client
-    blockNumber, err := anvil.Client().BlockNumber(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    log.Printf("Current block: %d", blockNumber)
-
-    // Drive Anvil's RPC with context-first methods
-    if err := anvil.MineBlock(ctx); err != nil {
-        log.Fatal(err)
-    }
+	balance, err := node.Client().BalanceAt(ctx, to, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), balance.Int64())
 }
 ```
 
-## Configuration
+`node.Client()` returns a go-ethereum `ethclient`. `node.RPCClient()` is there for RPC methods this package doesn't wrap.
 
-### Builder Pattern
-
-Use the builder pattern for custom configuration:
+Outside a test, start and stop the node yourself:
 
 ```go
-// anvil's stdout is logged at Debug, so use a handler that shows it
-logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-anvil, err := anvil.NewBuilder().
-    WithBlockTime(time.Second).      // Mine a block every second
-    WithChainID(1337).               // Custom chain ID
-    WithGasLimit(12_000_000).        // Block gas limit
-    WithPort(8545).                  // Fixed RPC port (default: a free port)
-    WithLogger(logger).              // Receive anvil's output (default: discarded)
-    WithFork("https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY").
-    WithForkBlockNumber(15_000_000). // Fork from specific block
-    WithArgs("--hardfork", "cancun"). // Any other anvil flag
-    Build()
-```
-
-### Available Options
-
-- `WithBlockTime(d)` - Mine a block every `d` instead of one per transaction
-- `WithChainID(id)` - Set the chain ID
-- `WithGasLimit(limit)` - Set the block gas limit
-- `WithPort(port)` - Use a fixed RPC port. By default anvil picks a free port, so parallel tests never collide; `URL()` returns the endpoint.
-- `WithFork(url)` - Fork from a remote network
-- `WithForkBlockNumber(number)` - Fork from a specific block
-- `WithLogger(logger)` - Receive anvil's stdout (Debug) and stderr (Warn) on a `*slog.Logger`
-- `WithArgs(args...)` - Pass any other flag to anvil
-
-## Usage Examples
-
-Every mutating RPC method takes a `context.Context` as its first argument. Tests can use `t.Context()`; production callers should use their request context or `context.Background()` with a deadline.
-
-### Block Mining
-
-```go
-ctx := context.Background()
-
-// Mine a single block
-err := anvil.MineBlock(ctx)
-
-// Mine multiple blocks
-err = anvil.Mine(ctx, 5, 0)   // 5 blocks, default timestamps
-err = anvil.Mine(ctx, 5, 12)  // 5 blocks, 12 seconds apart
-
-// Mine one block at a specific timestamp
-err = anvil.SetNextBlockTimestamp(ctx, time.Now().Add(time.Hour).Unix())
-err = anvil.MineBlock(ctx)
-
-// Wait for a specific block
-waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-defer cancel()
-err = anvil.WaitForBlock(waitCtx, 10)
-```
-
-### Time Manipulation
-
-```go
-// Increase time by 1 hour
-err := anvil.IncreaseTime(ctx, 3600)
-
-// Set timestamp for next block
-err = anvil.SetNextBlockTimestamp(ctx, time.Now().Unix())
-```
-
-### Account Management
-
-```go
-// Get the ten default funded accounts
-accounts := anvil.Accounts()
-key, sender := accounts[0].Key, accounts[0].Address
-
-// Set account balance
-address := common.HexToAddress("0x...")
-err := anvil.SetBalance(ctx, address, big.NewInt(1e18))  // 1 ETH
-
-// Impersonate an account (send transactions without private key)
-err = anvil.Impersonate(ctx, address)
-// ... send transactions as this address
-err = anvil.StopImpersonating(ctx, address)
-
-// Set account nonce
-err = anvil.SetNonce(ctx, address, 42)
-```
-
-### State Management
-
-```go
-// Reset to initial state (fast - uses RPC)
-err := anvil.ResetState(ctx)
-
-// Create a snapshot
-snapshotID, err := anvil.Snapshot(ctx)
-
-// Revert to snapshot
-success, err := anvil.Revert(ctx, snapshotID)
-```
-
-### Advanced Operations
-
-```go
-// Set bytecode at address
-err := anvil.SetCode(ctx, address, common.FromHex("0x6080604052..."))
-
-// Modify storage slot
-err = anvil.SetStorageAt(ctx, address, common.HexToHash("0x0"), common.HexToHash("0x2a"))
-
-// Control mining
-err = anvil.SetAutomine(ctx, false)  // Disable automatic mining
-err = anvil.SetIntervalMining(ctx, 5)  // Mine every 5 seconds
-
-// Enable auto-impersonation
-err = anvil.AutoImpersonate(ctx, true)
-
-// Drop a pending transaction; dropped is false if it wasn't in the pool
-dropped, err := anvil.DropTransaction(ctx, txHash)
-```
-
-## Testing
-
-Anvil picks its own port and starts in about 50 ms, so give each test its own instance and run the tests in parallel:
-
-```go
-func TestMyContract(t *testing.T) {
-    t.Parallel()
-
-    node, err := anvil.New()
-    require.NoError(t, err)
-    require.NoError(t, node.Start())
-    t.Cleanup(func() { _ = node.Close() })
-
-    // ... your test
+node, err := anvil.New()
+if err != nil {
+	log.Fatal(err)
 }
+if err := node.Start(); err != nil {
+	log.Fatal(err)
+}
+defer node.Close()
 ```
 
-When setup is expensive (a fork, deployed contracts), share one instance across sequential subtests and call `ResetState(ctx)` between them to return to the state right after `Start`.
+## Configure a node
 
-This repo's own tests run with `-shuffle=on`. A failing run prints its seed; `go test -shuffle=<seed> ./...` repeats that order.
+Pass a builder to `NewT`, or call `Build` and `Start` on it.
 
-## API Documentation
-
-Full API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/neverDefined/go-anvil).
-
-## Development
-
-```bash
-# Run tests
-make test
-
-# Run linter
-make lint
-
-# Run all checks
-make check
+```go
+node := anvil.NewT(t, anvil.NewBuilder().
+	WithChainID(1337).
+	WithBlockTime(time.Second). // default: one block per transaction
+	WithArgs("--hardfork", "cancun")) // any other anvil flag
 ```
+
+The other options are `WithFork`, `WithForkBlockNumber`, `WithGasLimit`, `WithPort`, `WithStartupTimeout` and `WithLogger`. anvil's output is discarded unless you set a logger.
+
+## Recipes
+
+These run inside a test, with `ctx := t.Context()` and `node := anvil.NewT(t, nil)`.
+
+### Send from an address without its key
+
+```go
+require.NoError(t, node.SetBalance(ctx, whale, big.NewInt(1e18)))
+require.NoError(t, node.Impersonate(ctx, whale))
+
+hash, err := node.SendTransaction(ctx, anvil.TxArgs{From: whale, To: &to, Value: big.NewInt(1)})
+require.NoError(t, err)
+```
+
+### Move time
+
+`IncreaseTime` takes effect in the next block.
+
+```go
+require.NoError(t, node.IncreaseTime(ctx, 3600))
+require.NoError(t, node.MineBlock(ctx))
+```
+
+For an exact time, call `SetNextBlockTimestamp` and then `MineBlock`. `Mine(ctx, 5, 12)` mines five blocks 12 seconds apart.
+
+### Undo changes
+
+```go
+id, err := node.Snapshot(ctx)
+require.NoError(t, err)
+
+// change the chain, then go back
+ok, err := node.Revert(ctx, id)
+require.NoError(t, err)
+require.True(t, ok)
+```
+
+`ResetState(ctx)` goes back to the state right after `Start`, so it also discards anything deployed since. A snapshot works once, so take a new one after each `Revert`.
+
+### Fork a network and give an address tokens
+
+```go
+node := anvil.NewT(t, anvil.NewBuilder().WithFork(rpcURL).WithForkBlockNumber(19_000_000))
+
+require.NoError(t, node.DealERC20(ctx, token, holder, big.NewInt(1_000_000)))
+require.NoError(t, node.SetERC20Allowance(ctx, token, holder, spender, big.NewInt(1_000_000)))
+```
+
+### Keep a fixture between runs
+
+```go
+state, err := node.DumpState(ctx)
+require.NoError(t, err)
+
+// later, on a new node
+require.NoError(t, other.LoadState(ctx, state))
+```
+
+### Trace a transaction
+
+```go
+raw, err := node.DebugTraceTransaction(ctx, hash, &anvil.TraceConfig{Tracer: "callTracer"})
+require.NoError(t, err)
+t.Log(string(raw))
+```
+
+## Reference
+
+[pkg.go.dev](https://pkg.go.dev/github.com/neverDefined/go-anvil) documents every method and has runnable examples. [CHANGELOG.md](CHANGELOG.md) lists what changed between releases.
+
+## Contributing
+
+`make check` runs formatting, vet, lint and tests. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

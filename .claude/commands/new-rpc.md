@@ -27,7 +27,6 @@ If arguments are missing, ask the user for:
 
    ```go
    // <MethodName> <one-line purpose>.
-   // Returns an error if the RPC call fails or if ctx is canceled.
    func (a *Anvil) <MethodName>(ctx context.Context, <params>) error {
        return a.call(ctx, nil, "<rpc_method_name>", <param-names>)
    }

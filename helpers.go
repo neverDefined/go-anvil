@@ -41,8 +41,8 @@ func NewT(tb testing.TB, builder *Builder) *Anvil {
 	return a
 }
 
-// FundAccounts sets the balance of each address to wei. It stops at the first
-// error.
+// FundAccounts sets the balance of each address to the given amount of wei. It
+// stops at the first error.
 func (a *Anvil) FundAccounts(ctx context.Context, addresses []common.Address, wei *big.Int) error {
 	for _, address := range addresses {
 		if err := a.SetBalance(ctx, address, wei); err != nil {
@@ -52,7 +52,8 @@ func (a *Anvil) FundAccounts(ctx context.Context, addresses []common.Address, we
 	return nil
 }
 
-// NewFundedAccount generates a new key and sets its address's balance to wei.
+// NewFundedAccount generates a new key and sets its address's balance to the
+// given amount of wei.
 func (a *Anvil) NewFundedAccount(ctx context.Context, wei *big.Int) (Account, error) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -65,20 +66,17 @@ func (a *Anvil) NewFundedAccount(ctx context.Context, wei *big.Int) (Account, er
 	return account, nil
 }
 
-// VerifyProof verifies an EIP-1186 proof (as returned by GetProof) against a
-// state root — typically the Root of the block header the proof was taken at.
-// It checks that the account proof binds the claimed nonce, balance, storage
-// hash, and code hash, and that every storage proof is consistent with the
-// proven storage hash. The account must exist in the state trie; account
-// exclusion proofs are not supported. Storage slots with a zero value are
-// verified as absence proofs against the storage trie.
+// VerifyProof checks an EIP-1186 proof from GetProof against a state root, usually
+// the Root of the header the proof was taken at. It returns nil if the account
+// proof binds the claimed nonce, balance, storage hash and code hash, and every
+// storage proof matches the proven storage hash. The account must exist in the
+// state trie; account exclusion proofs aren't supported. A storage slot with a
+// zero value is verified as an absence proof.
 //
-// VerifyProof checks consistency, not completeness: only the storage entries
-// present in proof.StorageProof are verified, so a response omitting a
-// requested slot goes unnoticed. Callers proving a specific slot must confirm
-// a StorageProof entry for it exists, comparing keys in normalized form —
-// "0x1" and "0x01" name the same slot.
-// Returns nil if the proof is valid.
+// It doesn't check completeness: only the entries in proof.StorageProof are
+// verified, so a response that omits a requested slot goes unnoticed. To prove a
+// specific slot, confirm it has a StorageProof entry, comparing keys in normalized
+// form, because "0x1" and "0x01" name the same slot.
 func VerifyProof(stateRoot common.Hash, proof *AccountResult) error {
 	if proof == nil {
 		return fmt.Errorf("verify proof: proof is nil")
@@ -197,11 +195,10 @@ func parseStorageKey(key string) ([]byte, error) {
 }
 
 // WaitForMemPoolEmpty waits until the transaction pool holds no pending and no
-// queued transactions (txpool_status). Queued transactions are ones that cannot
-// be mined yet, for example because of a nonce gap. It checks immediately, then
-// every 100ms, until the pool is empty or ctx is done, so pass a ctx with a
-// deadline to bound the wait.
-// Returns an error if ctx is done first or if the query fails.
+// queued transactions. Queued transactions are ones that can't be mined yet, for
+// example because of a nonce gap. It checks immediately, then every 100ms, until
+// the pool is empty or ctx is done, so pass a ctx with a deadline to bound the
+// wait.
 func (a *Anvil) WaitForMemPoolEmpty(ctx context.Context) error {
 	// Check the lifecycle first so ErrNotStarted isn't masked by a finished ctx.
 	if _, err := a.running(); err != nil {

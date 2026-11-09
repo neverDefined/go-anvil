@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `GetProof(ctx, address, storageKeys, blockNumber)` — EIP-1186 `eth_getProof` wrapper returning `*AccountResult`, for light-client style tests (#84).
-- `VerifyProof(stateRoot, proof)` — verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
+- Package overview in `doc.go` and runnable godoc examples (#70).
+- `GetProof(ctx, address, storageKeys, blockNumber)` wraps EIP-1186 `eth_getProof` and returns `*AccountResult`, for light-client tests (#84).
+- `VerifyProof(stateRoot, proof)` verifies an EIP-1186 account + storage proof against a state root, e.g. a block header's `Root` (#84).
 - `URL()` returns the node's HTTP JSON-RPC endpoint.
 - `ErrProcessExited`, returned by `Start()` when anvil exits before it is ready.
 - `WithArgs(...string)` passes any other flag to anvil.
@@ -25,15 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Minimum `github.com/ethereum/go-ethereum` is now v1.17.10.
 - **Behavior change:** without `WithPort`, anvil now picks a free port instead of using 8545. Use `URL()` to find it, or `WithPort(8545)` to keep the old behavior.
-- `Start()` waits for anvil's `Listening on` line instead of polling the RPC endpoint every 50ms.
+- `Start()` waits for anvil's `Listening on` line, then probes that address until it answers, instead of polling a fixed endpoint every 50ms.
 - `Close()` and `Stop()` are now the same call.
-- **Breaking:** builder options take real types: `WithPort(int)`, `WithChainID(uint64)`, `WithBlockTime(time.Duration)`, `WithForkBlockNumber(uint64)`, `WithGasLimit(uint64)`. Calling one twice keeps the last value instead of passing the flag twice.
-- `Build()` returns `ErrInvalidConfig` for an out-of-range port, a negative block time, a fork block without a fork URL, the `--silent`, `--quiet` and `-q` flags, which hide the output `Start()` waits for, and `--port` or `-p` in `WithArgs`.
+- **Breaking:** builder options take typed values instead of strings: `WithPort(int)`, `WithChainID(uint64)`, `WithBlockTime(time.Duration)`, `WithForkBlockNumber(uint64)`, `WithGasLimit(uint64)`. Calling one twice keeps the last value instead of passing the flag twice.
+- `Build()` returns `ErrInvalidConfig` for an out-of-range port, a negative block time, or a fork block without a fork URL. It also rejects `--silent`, `--quiet`, `-q`, `--port` and `-p` in `WithArgs`; the first three hide the output `Start()` waits for.
 - **Breaking:** `SetCode` takes `[]byte`, and `SetStorageAt` takes a `common.Hash` slot and value.
 - **Breaking:** `DropTransaction` takes a `common.Hash` and also returns whether anvil dropped anything.
 - **Breaking:** `Snapshot` and `Revert` use a `SnapshotID` type (#63).
-- **Breaking:** `New`, `NewBuilder` and `Builder` replace `NewAnvil`, `NewAnvilBuilder` and `AnvilBuilder`, so callers write `anvil.New()` instead of `anvil.NewAnvil()`.
+- **Breaking:** `New`, `NewBuilder` and `Builder` replace `NewAnvil`, `NewAnvilBuilder` and `AnvilBuilder`.
 - **Breaking:** `WaitForMemPoolEmpty(ctx)` no longer takes a timeout. Put a deadline on `ctx`.
 - **Breaking:** `GetProof` takes storage keys as `[]common.Hash` instead of hex strings.
 - **Breaking:** `WaitForBlock(ctx, number)` replaces `WaitForBlock(number, timeout)`. Put a deadline on `ctx`. It now checks before its first 100ms tick.
@@ -56,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read: use `WithLogger`, and `WithPort` plus `URL()` for the endpoint.
+- `AnvilConfig` and `DefaultConfig`. In 0.1.0 only `LogLevel` and `DefaultRPCURL` were read. Use `WithLogger` instead of `LogLevel`, and `WithPort` plus `URL()` instead of `DefaultRPCURL`.
 - `ErrProcessNotFound` and `ErrRPCCallFailed`, which nothing returned.
 - `MemPoolEmpty(ctx, client)`, deprecated in 0.1.0. Use `(*Anvil).WaitForMemPoolEmpty(ctx)` (#61).
 - `Metrics()` and `AnvilMetrics`. `LastError` was never set, and the block count included failed calls but not automined or interval blocks.
@@ -67,15 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Start()` no longer reports success while connected to another process when the port is already in use. It returns `ErrProcessExited` with anvil's error.
 - `Start()` returns as soon as anvil exits during startup (for example, on an invalid flag), with anvil's stderr in the error, instead of waiting for the full startup timeout.
-- RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. Instances are single-use, so this also applies after a failed `Start()`. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
+- RPC methods, `WaitForBlock` and `WaitForMemPoolEmpty` return `ErrNotStarted` before `Start()` and after `Close()` instead of panicking on a nil client. A second `Start()` returns `ErrAlreadyStarted` instead of leaking the first process. A `Start()` that failed counts as the first call, because instances are single-use. `Client()`, `RPCClient()` and `URL()` return nil/empty after `Close()`.
 - `Close()` no longer sleeps for 1 second after the process has exited (#80).
 - `Mine(ctx, n, x)` documented `x` as a timestamp, but anvil treats it as the number of seconds between blocks, so passing a Unix time moved the chain decades ahead. The parameter is now named `interval` and the README shows `SetNextBlockTimestamp` + `MineBlock` for an absolute time.
 - `ResetState()` returns to the state right after `Start()`. Its first call used to snapshot whatever state existed at that moment. A failed snapshot no longer breaks later resets for good, and concurrent calls are serialized instead of consuming the same snapshot (#79).
-- `WaitForMemPoolEmpty()` counts queued transactions (via `txpool_status`), not just the pending block, and checks before its first 100ms tick.
-
-### Changed
-
-- Minimum `github.com/ethereum/go-ethereum` is now v1.17.10.
+- `WaitForMemPoolEmpty()` counts queued transactions as well as pending ones (via `txpool_status`), and checks before its first 100ms tick.
 
 ## [0.1.0] - 2026-04-23
 
