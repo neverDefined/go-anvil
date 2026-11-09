@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"math/big"
 	"os"
 	"sync"
@@ -20,6 +21,15 @@ import (
 
 // Integration tests. Each test starts its own anvil (about 50ms) on a port anvil
 // picks, so tests run in parallel and never share chain state.
+
+// TestMain skips the examples when anvil isn't installed, because an Example
+// can't call t.Skip. With CI set they still run and fail, like the tests.
+func TestMain(m *testing.M) {
+	if _, err := resolveAnvilPath(); errors.Is(err, ErrAnvilNotFound) && os.Getenv("CI") == "" {
+		_ = flag.Set("test.skip", "^Example")
+	}
+	os.Exit(m.Run())
+}
 
 // requireAnvil skips the test when anvil isn't installed, so `go test ./...`
 // works without Foundry. A broken install fails, and so does a missing anvil

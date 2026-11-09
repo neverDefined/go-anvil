@@ -1,83 +1,40 @@
 # Contributing to go-anvil
 
-Thanks for your interest. This is a solo-maintained library, so PRs and issues are reviewed on a best-effort basis.
+This library has one maintainer, so reviews may take a while.
 
-## Prerequisites
+## Setup
 
-- Go 1.25 or later (matches `go.mod`)
-- [Foundry](https://book.getfoundry.sh/) — the integration tests spawn real `anvil` processes
-- `make`
+You need Go 1.25 or later, [Foundry](https://book.getfoundry.sh/getting-started/installation) and `make`. `make install-tools` installs golangci-lint and goimports.
 
-Install the Go toolchain helpers once:
+## Checks
 
-```
-make install-tools
-```
-
-## Local workflow
-
-The single command to run before pushing:
+Run this before you push:
 
 ```
 make check
 ```
 
-That wraps `fmt`, `vet`, `lint` (golangci-lint against the repo's `.golangci.yml`), and `test` (with `-race`).
+It runs `make fmt`, `vet`, `lint` and `test`. `make test` runs `go test -race -shuffle=on ./...`. A failing run prints its seed, and `go test -shuffle=<seed> ./...` repeats that order.
 
-Individual targets if you want to run them in isolation:
+The integration tests and examples start real anvil processes. Without Foundry they are skipped, unless `CI` is set, which makes a missing anvil a failure. `make check-foundry` tells you whether anvil is on your `PATH`.
 
-```
-make fmt          # gofmt / gofumpt
-make vet          # go vet
-make lint         # golangci-lint run
-make test         # go test -race -shuffle=on ./...
-make test-coverage # HTML coverage report
-```
-
-The integration tests start real anvil instances. Without Foundry they skip, so `go test ./...` still runs the unit tests; `make check-foundry` tells you whether anvil is installed. When `CI` is set, a missing anvil fails the run instead of skipping.
-
-Fork-mode tests are gated behind a `fork` build tag and require `ETH_RPC_URL`:
+Fork tests need the `fork` build tag and an RPC URL:
 
 ```
 ETH_RPC_URL=https://... go test -tags=fork -run Fork ./...
 ```
 
-## Branch naming
+## Branches and commits
 
-Use a prefix that reflects the nature of the change. Examples:
+Name branches with a type prefix, such as `feat/`, `fix/`, `chore/`, `docs/` or `ci/`.
 
-- `feat/context-first-rpc-methods`
-- `fix/startup-timeout-race`
-- `chore/bump-foundry-1.6`
-- `docs/examples-fork-scenario`
-- `ci/add-govulncheck`
-
-## Commit style
-
-Use [Conventional Commits](https://www.conventionalcommits.org/). Examples:
-
-```
-feat(api): add SetCoinbase RPC wrapper
-fix(startup): replace 2s sleep with readiness probe
-chore(deps): bump go-ethereum to v1.18.0
-docs(readme): document snapshot/revert pattern
-```
-
-The scope is optional but helpful. Breaking changes go under `feat!:` / `fix!:` or include a `BREAKING CHANGE:` footer.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/). Mark breaking changes with `feat!:`, `fix!:` or a `BREAKING CHANGE:` footer.
 
 ## Pull requests
 
-Every PR should:
+- Start the body with `Closes #N`. If there's no issue yet, file one first.
+- Work through the checklist in the PR template.
+- Keep each PR to one concern.
+- Don't amend or force-push after review has started, unless asked.
 
-1. Close an issue — put `Closes #N` at the top of the body. If an issue doesn't exist yet, file one first (the maintainer tracks all work via issues).
-2. Pass the PR template checklist (tests, lint, godoc, CHANGELOG if user-visible).
-3. Keep the diff focused. If you're also fixing an unrelated nit, file a separate PR.
-4. Not amend or force-push after review has started, unless asked.
-
-## Godoc
-
-Every exported identifier must have a godoc comment starting with the identifier name. `make lint` (via `revive`) enforces this.
-
-## Changelog
-
-User-visible changes go in `CHANGELOG.md` under `## [Unreleased]` in Keep-a-Changelog form (`Added` / `Changed` / `Fixed` / `Removed`). Maintainer-only chores don't need an entry.
+Every exported identifier needs a godoc comment that starts with its name; `make lint` enforces this. User-visible changes go in `CHANGELOG.md` under `[Unreleased]`.

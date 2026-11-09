@@ -1,6 +1,3 @@
-// Package anvil provides a Go interface for programmatic control of Anvil,
-// Foundry's local Ethereum test node. It enables management of test environments,
-// blockchain state manipulation, and control over time and accounts during development.
 package anvil
 
 import (
@@ -28,45 +25,44 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// Common errors
+// Errors returned by this package. Check them with errors.Is.
 var (
-	// ErrNotStarted indicates the Anvil instance has not been started yet
+	// ErrNotStarted means the instance isn't running: Start wasn't called, or Stop was.
 	ErrNotStarted = fmt.Errorf("anvil: instance not started")
 
-	// ErrAlreadyStarted indicates the Anvil instance is already running
+	// ErrAlreadyStarted means Start was called twice. Instances are single-use.
 	ErrAlreadyStarted = fmt.Errorf("anvil: instance already started")
 
-	// ErrConnectionFailed indicates the connection to Anvil failed
+	// ErrConnectionFailed means Start couldn't connect to anvil's RPC endpoint.
 	ErrConnectionFailed = fmt.Errorf("anvil: connection failed")
 
-	// ErrInvalidConfig indicates the configuration is invalid
+	// ErrInvalidConfig means Build rejected the builder's settings.
 	ErrInvalidConfig = fmt.Errorf("anvil: invalid configuration")
 
-	// ErrAnvilNotFound indicates the anvil binary could not be located on PATH or at the Foundry fallback path
+	// ErrAnvilNotFound means anvil isn't on PATH or in the Foundry install directory.
 	ErrAnvilNotFound = fmt.Errorf("anvil: binary not found")
 
-	// ErrAnvilNotExecutable indicates the anvil binary was located but is not executable
+	// ErrAnvilNotExecutable means the anvil binary was found but can't be run.
 	ErrAnvilNotExecutable = fmt.Errorf("anvil: binary not executable")
 
-	// ErrStartupTimeout indicates anvil did not become ready within the configured startup timeout
+	// ErrStartupTimeout means anvil wasn't ready within the startup timeout.
 	ErrStartupTimeout = fmt.Errorf("anvil: startup timeout exceeded")
 
-	// ErrProcessExited indicates the anvil process exited before it became ready,
-	// for example because of an invalid flag or a port that is already in use.
-	// The error message includes the exit status and anvil's last stderr lines.
+	// ErrProcessExited means anvil exited before it was ready, for example on an
+	// invalid flag or a port in use. The message has the exit status and anvil's
+	// last stderr lines.
 	ErrProcessExited = fmt.Errorf("anvil: process exited during startup")
 )
 
-// DefaultStartupTimeout is the default ceiling for waiting on anvil to become ready.
-// The readiness probe polls on a short interval and returns on the first successful RPC,
-// so typical startup completes well before this deadline.
+// DefaultStartupTimeout is how long Start waits for anvil unless
+// WithStartupTimeout sets another limit.
 const DefaultStartupTimeout = 5 * time.Second
 
 // pollInterval is how often WaitForBlock and WaitForMemPoolEmpty check the node.
 const pollInterval = 100 * time.Millisecond
 
-// SnapshotID identifies a saved chain state. It is opaque: get one from
-// Snapshot and pass it back to Revert.
+// SnapshotID identifies a saved chain state. Get one from Snapshot and pass it
+// to Revert.
 type SnapshotID string
 
 // Account is a private key and its address. Accounts returns anvil's pre-funded
@@ -114,7 +110,7 @@ const (
 	stateStopped
 )
 
-// Anvil represents a local Ethereum test environment
+// Anvil controls one anvil process. Create one with New, NewBuilder or NewT.
 type Anvil struct {
 	context        context.Context
 	cancel         context.CancelFunc
@@ -140,25 +136,22 @@ type Anvil struct {
 	baseline   SnapshotID
 }
 
-// New creates a new Anvil instance with default configuration.
-// Anvil picks a free port when started; URL reports the address.
-// Returns an error if the configuration is invalid.
+// New returns an instance with the default configuration. Call Start to run it.
 func New() (*Anvil, error) {
 	return NewBuilder().Build()
 }
 
-// Start launches the anvil process and waits until its RPC endpoint answers.
+// Start launches anvil and returns once its RPC endpoint answers.
 //
-// Unless WithPort was used, anvil picks a free port itself, so instances in
-// parallel tests or test binaries never collide; URL reports the address.
-// Subprocess stdout and stderr go to the instance logger.
+// Unless WithPort was used, anvil picks a free port, so instances in parallel
+// tests never collide. URL reports the address.
 //
-// If the process exits during startup (an invalid flag, a port already in use),
-// Start returns ErrProcessExited right away, with anvil's stderr in the message.
-// If anvil is not ready within the startup timeout, Start returns
-// ErrStartupTimeout. In both cases the process is stopped.
+// If anvil exits during startup, for example on an invalid flag or a port in
+// use, Start returns ErrProcessExited with anvil's stderr in the message. If
+// anvil isn't ready within the startup timeout, it returns ErrStartupTimeout.
+// Either way the process is stopped.
 //
-// An instance can be started only once; a second call returns ErrAlreadyStarted.
+// An instance can be started only once. A second call returns ErrAlreadyStarted.
 func (a *Anvil) Start() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -414,17 +407,15 @@ func (a *Anvil) call(ctx context.Context, result any, method string, args ...any
 	return nil
 }
 
-// Client returns the Ethereum client for interacting with the blockchain.
-// The client can be used to query blocks, send transactions, and interact with contracts.
-// It is nil before Start and after Stop.
+// Client returns an ethclient connected to the node. It is nil before Start and
+// after Stop.
 func (a *Anvil) Client() *ethclient.Client {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.client
 }
 
-// RPCClient returns the raw RPC client for making direct JSON-RPC calls.
-// This is useful for calling Anvil-specific methods that aren't available in the standard Ethereum client.
+// RPCClient returns the JSON-RPC client, for methods this package doesn't wrap.
 // It is nil before Start and after Stop.
 func (a *Anvil) RPCClient() *rpc.Client {
 	a.mu.RLock()
@@ -467,85 +458,70 @@ func (a *Anvil) DialWS(ctx context.Context) (*ethclient.Client, error) {
 	return client, nil
 }
 
-// Accounts returns anvil's ten pre-funded default accounts. They come from
-// anvil's default mnemonic and account count, so a node started with a
-// different --mnemonic or --accounts through WithArgs won't have them all.
+// Accounts returns anvil's ten pre-funded default accounts. With a different
+// --mnemonic or a smaller --accounts through WithArgs, some or all of them won't
+// be funded.
 func (a *Anvil) Accounts() []Account {
 	return slices.Clone(defaultAccounts())
 }
 
-// MineBlock triggers the immediate mining of a new block.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// MineBlock mines one block.
 func (a *Anvil) MineBlock(ctx context.Context) error {
 	return a.call(ctx, nil, "evm_mine")
 }
 
-// SetNextBlockTimestamp sets the timestamp for the next block to be mined.
-// This only affects the next block; subsequent blocks will use normal timestamps.
-// The timestamp is in Unix seconds.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetNextBlockTimestamp sets the timestamp of the next block, in Unix seconds.
 func (a *Anvil) SetNextBlockTimestamp(ctx context.Context, timestamp int64) error {
 	return a.call(ctx, nil, "evm_setNextBlockTimestamp", timestamp)
 }
 
-// IncreaseTime increases the current block time by the specified number of seconds.
-// This affects all future blocks and is useful for testing time-dependent contracts.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// IncreaseTime moves the chain's clock forward by seconds. The next mined block
+// shows the change.
 func (a *Anvil) IncreaseTime(ctx context.Context, seconds int64) error {
 	return a.call(ctx, nil, "evm_increaseTime", seconds)
 }
 
-// SetBalance sets the balance of an account to the specified amount in Wei.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetBalance sets the balance of address, in wei.
 func (a *Anvil) SetBalance(ctx context.Context, address common.Address, balance *big.Int) error {
 	return a.call(ctx, nil, "anvil_setBalance", address, balance.String())
 }
 
-// Impersonate enables impersonating an account, allowing transactions to be sent
-// from that address without needing the private key.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// Impersonate lets SendTransaction send from address without its private key.
 func (a *Anvil) Impersonate(ctx context.Context, address common.Address) error {
 	return a.call(ctx, nil, "anvil_impersonateAccount", address)
 }
 
-// StopImpersonating stops impersonating an account that was previously impersonated.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// StopImpersonating undoes Impersonate for address.
 func (a *Anvil) StopImpersonating(ctx context.Context, address common.Address) error {
 	return a.call(ctx, nil, "anvil_stopImpersonatingAccount", address)
 }
 
 // Snapshot saves the current chain state and returns an ID to pass to Revert.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) Snapshot(ctx context.Context) (SnapshotID, error) {
 	var id SnapshotID
 	err := a.call(ctx, &id, "evm_snapshot")
 	return id, err
 }
 
-// Revert restores the chain state saved by Snapshot. A snapshot can be used
-// once: reverting also discards it and any taken after it. It returns false if
-// the snapshot no longer exists.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// Revert restores the state saved by Snapshot and reports whether the snapshot
+// existed. A snapshot works once: reverting discards it and any taken after it.
 func (a *Anvil) Revert(ctx context.Context, id SnapshotID) (bool, error) {
 	var success bool
 	err := a.call(ctx, &success, "evm_revert", id)
 	return success, err
 }
 
-// SetCode sets the bytecode at a given address.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetCode sets the bytecode at address.
 func (a *Anvil) SetCode(ctx context.Context, address common.Address, code []byte) error {
 	return a.call(ctx, nil, "anvil_setCode", address, hexutil.Bytes(code))
 }
 
-// SetStorageAt sets the value of a storage slot at an address.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetStorageAt sets one storage slot of address.
 func (a *Anvil) SetStorageAt(ctx context.Context, address common.Address, slot, value common.Hash) error {
 	return a.call(ctx, nil, "anvil_setStorageAt", address, slot, value)
 }
 
-// SetNonce sets the nonce for a given address.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetNonce sets the nonce of address.
 func (a *Anvil) SetNonce(ctx context.Context, address common.Address, nonce uint64) error {
 	return a.call(ctx, nil, "anvil_setNonce", address, hexutil.Uint64(nonce))
 }
@@ -553,7 +529,8 @@ func (a *Anvil) SetNonce(ctx context.Context, address common.Address, nonce uint
 // AccountResult is an EIP-1186 account proof with its storage proofs, as
 // returned by eth_getProof.
 //
-// It has the same fields and JSON tags as gethclient.AccountResult. go-anvil
+// It has the same field names and JSON tags as gethclient.AccountResult, with
+// hexutil types for Balance and Nonce. go-anvil
 // doesn't use that type because importing gethclient pulls go-ethereum's p2p
 // stack into every build.
 type AccountResult struct {
@@ -573,12 +550,10 @@ type StorageResult struct {
 	Proof []string     `json:"proof"`
 }
 
-// GetProof returns the EIP-1186 account and storage proofs for the given address.
-// Pass nil storageKeys for an account-only proof.
-// A nil blockNumber means the latest block; pin a specific block when the proof must
-// be checked against that block's state root. Use VerifyProof to check the result
-// against a header's state root.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// GetProof returns the EIP-1186 account and storage proofs for address. Pass nil
+// storageKeys for an account-only proof. A nil blockNumber means the latest
+// block; pin a block when the proof must match that block's state root.
+// VerifyProof checks the result against a header's state root.
 func (a *Anvil) GetProof(ctx context.Context, address common.Address, storageKeys []common.Hash, blockNumber *big.Int) (*AccountResult, error) {
 	if storageKeys == nil {
 		storageKeys = []common.Hash{}
@@ -603,13 +578,11 @@ func toBlockNumArg(number *big.Int) string {
 	return rpc.BlockNumber(number.Int64()).String()
 }
 
-// Mine mines numBlocks blocks at once.
-// interval is the number of seconds between block timestamps: the first block is
-// interval seconds after the node's current time and each later block interval
-// seconds after the one before it. With 0, anvil uses its normal timestamps.
-// It is not an absolute time; to mine at a specific timestamp, call
+// Mine mines numBlocks blocks. interval is the number of seconds between block
+// timestamps: the first block is interval seconds after the node's current time
+// and each later block interval seconds after the one before it. With 0, anvil
+// uses its normal timestamps. To mine at an absolute time, call
 // SetNextBlockTimestamp and then MineBlock.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) error {
 	args := []any{hexutil.Uint64(numBlocks)}
 	if interval != 0 {
@@ -618,31 +591,27 @@ func (a *Anvil) Mine(ctx context.Context, numBlocks uint64, interval uint64) err
 	return a.call(ctx, nil, "anvil_mine", args...)
 }
 
-// DropTransaction removes a transaction from the pool. It returns false if
-// anvil dropped nothing, for example because the transaction isn't in the pool.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// DropTransaction removes a transaction from the pool and reports whether it
+// removed anything.
 func (a *Anvil) DropTransaction(ctx context.Context, hash common.Hash) (bool, error) {
 	var dropped *common.Hash
 	err := a.call(ctx, &dropped, "anvil_dropTransaction", hash)
 	return dropped != nil, err
 }
 
-// SetAutomine enables or disables automatic mining of blocks.
-// When disabled, blocks must be mined manually using MineBlock or Mine.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetAutomine sets whether anvil mines a block for each transaction. With it
+// off, mine with MineBlock or Mine.
 func (a *Anvil) SetAutomine(ctx context.Context, enabled bool) error {
 	return a.call(ctx, nil, "evm_setAutomine", enabled)
 }
 
-// SetIntervalMining sets the mining behavior to interval mining with the specified interval in seconds.
-// Set to 0 to disable interval mining.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// SetIntervalMining makes anvil mine on a fixed interval, in seconds. Zero turns
+// it off.
 func (a *Anvil) SetIntervalMining(ctx context.Context, seconds uint64) error {
 	return a.call(ctx, nil, "evm_setIntervalMining", seconds)
 }
 
-// AutoImpersonate enables or disables automatic impersonation for all transactions.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// AutoImpersonate lets SendTransaction send from any address while enabled.
 func (a *Anvil) AutoImpersonate(ctx context.Context, enabled bool) error {
 	return a.call(ctx, nil, "anvil_autoImpersonateAccount", enabled)
 }
@@ -675,13 +644,12 @@ func (tx TxArgs) params() map[string]any {
 	return params
 }
 
-// SendTransaction submits a transaction that anvil signs itself, which works
-// for its default accounts and for impersonated addresses. To send from a key
-// you hold, sign the transaction and use Client().SendTransaction.
+// SendTransaction submits a transaction that anvil signs itself, which works for
+// its default accounts and for impersonated addresses. To send from a key you
+// hold, sign the transaction and use Client().SendTransaction.
 //
-// With automine on, this can return just before the transaction is mined, so
-// wait for its receipt, for example with bind.WaitMinedHash.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// With automine on, this can return just before the transaction is mined. Call
+// WaitForMemPoolEmpty or wait for the receipt before reading the result.
 func (a *Anvil) SendTransaction(ctx context.Context, tx TxArgs) (common.Hash, error) {
 	var hash common.Hash
 	err := a.call(ctx, &hash, "eth_sendTransaction", tx.params())
@@ -701,7 +669,6 @@ type TraceConfig struct {
 // DebugTraceTransaction returns the trace of a mined transaction as raw JSON,
 // whose shape depends on the tracer. A nil config uses the opcode logger, whose
 // log anvil leaves empty unless it was started with WithArgs("--steps-tracing").
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) DebugTraceTransaction(ctx context.Context, hash common.Hash, config *TraceConfig) (json.RawMessage, error) {
 	return a.trace(ctx, "debug_traceTransaction", config, hash)
 }
@@ -709,7 +676,6 @@ func (a *Anvil) DebugTraceTransaction(ctx context.Context, hash common.Hash, con
 // DebugTraceCall simulates tx at a block and returns its trace as raw JSON,
 // without changing the chain. A nil blockNumber means the latest block, and a
 // nil config uses the opcode logger.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) DebugTraceCall(ctx context.Context, tx TxArgs, blockNumber *big.Int, config *TraceConfig) (json.RawMessage, error) {
 	return a.trace(ctx, "debug_traceCall", config, tx.params(), toBlockNumArg(blockNumber))
 }
@@ -725,53 +691,46 @@ func (a *Anvil) trace(ctx context.Context, method string, config *TraceConfig, a
 	return result, err
 }
 
-// DumpState returns the chain state as an opaque blob for LoadState. Use it to
-// keep a fixture, such as a set of deployed contracts, between test runs.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// DumpState returns the chain state as a blob for LoadState. Use it to keep a
+// fixture, such as a set of deployed contracts, between test runs.
 func (a *Anvil) DumpState(ctx context.Context) ([]byte, error) {
 	var state hexutil.Bytes
 	err := a.call(ctx, &state, "anvil_dumpState")
 	return state, err
 }
 
-// LoadState applies a blob from DumpState, which may come from another
-// instance. It merges rather than replaces: accounts in the blob are
-// overwritten and other accounts are left as they are. On a node that isn't
-// forked, the head moves to the block number in the blob.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// LoadState applies a blob from DumpState, which may come from another instance.
+// It merges: accounts in the blob are overwritten and other accounts are left as
+// they are. On a node that isn't forked, the head moves to the block number in
+// the blob.
 func (a *Anvil) LoadState(ctx context.Context, state []byte) error {
 	return a.call(ctx, nil, "anvil_loadState", hexutil.Bytes(state))
 }
 
-// DealERC20 sets the token balance of to. anvil finds the balance slot by
+// DealERC20 sets the recipient's token balance to amount. anvil finds the balance slot by
 // simulating balanceOf, so it returns an error for a token that doesn't keep
 // balances in its own storage. The total supply doesn't change.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) DealERC20(ctx context.Context, token, to common.Address, amount *big.Int) error {
 	return a.call(ctx, nil, "anvil_dealERC20", to, token, (*hexutil.Big)(amount))
 }
 
 // SetERC20Allowance sets how much of owner's token balance spender may use.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetERC20Allowance(ctx context.Context, token, owner, spender common.Address, amount *big.Int) error {
 	return a.call(ctx, nil, "anvil_setERC20Allowance", owner, spender, token, (*hexutil.Big)(amount))
 }
 
 // SetNextBlockBaseFee sets the base fee of the next block, in wei. Later blocks
 // adjust from it as usual.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetNextBlockBaseFee(ctx context.Context, fee uint64) error {
 	return a.call(ctx, nil, "anvil_setNextBlockBaseFeePerGas", hexutil.Uint64(fee))
 }
 
 // SetCoinbase sets the miner address of future blocks.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetCoinbase(ctx context.Context, address common.Address) error {
 	return a.call(ctx, nil, "anvil_setCoinbase", address)
 }
 
 // SetBlockGasLimit sets the gas limit of future blocks.
-// Returns an error if the RPC call fails or if ctx is canceled.
 func (a *Anvil) SetBlockGasLimit(ctx context.Context, limit uint64) error {
 	return a.call(ctx, nil, "evm_setBlockGasLimit", hexutil.Uint64(limit))
 }
@@ -787,13 +746,12 @@ type ForkOptions struct {
 }
 
 // Reset discards the chain and starts over. With nil, the node becomes a fresh
-// local chain with its default accounts funded, and a forked node stops
-// forking. With options, the node forks again as they describe.
+// local chain with its default accounts funded, and a forked node stops forking.
+// With options, the node forks again as they describe.
 //
-// To undo changes while keeping the node as it started, use ResetState, which
-// is faster. anvil discards every snapshot on reset, so afterwards ResetState
-// returns to the freshly reset state rather than the state after Start.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// To undo changes and keep the node as it started, use ResetState. anvil discards
+// every snapshot on reset, so afterwards ResetState returns to the freshly reset
+// state rather than the state after Start.
 func (a *Anvil) Reset(ctx context.Context, fork *ForkOptions) error {
 	var args []any
 	if fork != nil {
@@ -815,16 +773,15 @@ func (a *Anvil) Reset(ctx context.Context, fork *ForkOptions) error {
 	return a.retakeBaselineLocked(ctx)
 }
 
-// Close stops the anvil process and closes the RPC clients. It is the same as
-// Stop: safe to call more than once, and on an instance that was never started.
-// Typically deferred or registered with t.Cleanup.
+// Close stops the node. It is the same as Stop, and is safe to call more than
+// once or on an instance that was never started.
 func (a *Anvil) Close() error {
 	return a.Stop()
 }
 
 // Stop kills the anvil process, waits for it to exit and closes the RPC clients.
-// Later calls on the instance return ErrNotStarted. It is safe to call more than
-// once. Returns an error only if the process could not be killed.
+// Later RPC calls on the instance return ErrNotStarted. It is safe to call more than
+// once. It returns an error only if the process could not be killed.
 func (a *Anvil) Stop() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -864,15 +821,12 @@ func (a *Anvil) shutdownLocked() error {
 	return err
 }
 
-// ResetState reverts the chain to the state it had right after Start (or after
-// the last Reset), discarding every block, transaction and state change since.
-// It uses evm_snapshot/evm_revert, which is much faster than restarting the process.
-// Node settings that are not chain state, such as automine, impersonation or
-// the coinbase, are not reset.
+// ResetState reverts the chain to the state right after Start or the last Reset.
+// Settings that aren't chain state, such as automine, impersonation or the
+// coinbase, stay as they are.
 //
-// Concurrent calls are serialized. Resetting does not isolate tests that run in
-// parallel against the same instance; give those their own instances.
-// Returns an error if the RPC call fails or if ctx is canceled.
+// Concurrent calls are serialized. Resetting doesn't isolate tests running in
+// parallel on one instance; give those their own instances.
 func (a *Anvil) ResetState(ctx context.Context) error {
 	// Checking the state first also orders this read of baseline after Start's write.
 	if _, err := a.running(); err != nil {
@@ -911,10 +865,9 @@ func (a *Anvil) retakeBaselineLocked(ctx context.Context) error {
 	return nil
 }
 
-// WaitForBlock waits until the chain reaches block number. It checks
-// immediately, then every 100ms, until the block is reached or ctx is done, so
-// pass a ctx with a deadline to bound the wait.
-// Returns an error if ctx is done first or if the query fails.
+// WaitForBlock waits until the chain reaches the given block. It checks immediately,
+// then every 100ms, until the block is reached or ctx is done, so pass a ctx with
+// a deadline to bound the wait.
 func (a *Anvil) WaitForBlock(ctx context.Context, number uint64) error {
 	// Check the lifecycle first so ErrNotStarted isn't masked by a finished ctx.
 	if _, err := a.running(); err != nil {
@@ -944,8 +897,8 @@ func (a *Anvil) WaitForBlock(ctx context.Context, number uint64) error {
 	}
 }
 
-// Builder helps construct Anvil instances using the builder pattern.
-// It allows for flexible configuration of Anvil options before creating the instance.
+// Builder configures an instance. Its With methods return the builder, so calls
+// chain, and they take effect when Build runs.
 type Builder struct {
 	port           int
 	blockTime      time.Duration
@@ -958,52 +911,44 @@ type Builder struct {
 	logger         *slog.Logger
 }
 
-// NewBuilder creates a new Builder with default configuration.
-// Use the With* methods to customize the configuration before calling Build().
+// NewBuilder returns a Builder with the default configuration.
 func NewBuilder() *Builder {
 	return &Builder{startupTimeout: DefaultStartupTimeout}
 }
 
 // WithBlockTime makes anvil mine a block every d instead of one per transaction.
 // Fractions of a second work. Zero, the default, leaves automine on.
-// Returns the builder for method chaining.
 func (b *Builder) WithBlockTime(d time.Duration) *Builder {
 	b.blockTime = d
 	return b
 }
 
-// WithFork configures Anvil to fork from a remote Ethereum node at the latest block.
-// Provide the RPC URL of the node to fork from. Returns the builder for method chaining.
+// WithFork forks the chain served at url, starting from its latest block.
 func (b *Builder) WithFork(url string) *Builder {
 	b.forkURL = url
 	return b
 }
 
-// WithForkBlockNumber sets the block number to fork from. It requires WithFork.
-// Returns the builder for method chaining.
+// WithForkBlockNumber sets the block to fork at. It requires WithFork.
 func (b *Builder) WithForkBlockNumber(number uint64) *Builder {
 	b.forkBlock = &number
 	return b
 }
 
-// WithPort sets a fixed RPC port for the Anvil instance. By default anvil picks
-// a free port, which keeps parallel tests and test binaries from colliding; use
-// URL to find it. With a fixed port, Start returns ErrProcessExited if the port
-// is already in use. Returns the builder for method chaining.
+// WithPort sets a fixed RPC port. By default anvil picks a free port, which URL
+// reports. With a fixed port, Start returns ErrProcessExited if it is in use.
 func (b *Builder) WithPort(port int) *Builder {
 	b.port = port
 	return b
 }
 
-// WithChainID sets the chain ID for the Anvil instance.
-// Default is 31337. Returns the builder for method chaining.
+// WithChainID sets the chain ID. The default is 31337.
 func (b *Builder) WithChainID(id uint64) *Builder {
 	b.chainID = &id
 	return b
 }
 
-// WithGasLimit sets the block gas limit for the Anvil instance.
-// Returns the builder for method chaining.
+// WithGasLimit sets the block gas limit.
 func (b *Builder) WithGasLimit(limit uint64) *Builder {
 	b.gasLimit = &limit
 	return b
@@ -1014,30 +959,25 @@ func (b *Builder) WithGasLimit(limit uint64) *Builder {
 //
 //	WithArgs("--hardfork", "cancun", "--code-size-limit", "50000")
 //
-// Build rejects --silent, --quiet and -q, because they hide the output Start
-// waits for, and --port and -p; use WithPort. Stop kills the process, so flags
-// that act on a clean exit, such as --dump-state, don't take effect.
-// Calling WithArgs again adds to the earlier flags.
-// Returns the builder for method chaining.
+// Build rejects --silent, --quiet and -q, which hide the output Start waits for.
+// It also rejects --port and -p; use WithPort. Stop kills the process, so flags
+// that act on a clean exit, such as --dump-state, don't take effect. Calling
+// WithArgs again adds to the earlier flags.
 func (b *Builder) WithArgs(args ...string) *Builder {
 	b.extraArgs = append(b.extraArgs, args...)
 	return b
 }
 
 // WithLogger sets the logger that receives anvil's output: stdout at Debug and
-// stderr at Warn. A nil logger, the default, discards it. The handler runs on
-// the goroutine that reads anvil's output, so it must not block, or Stop will
-// hang. Returns the builder for method chaining.
+// stderr at Warn. A nil logger, the default, discards it. The handler runs on the
+// goroutine that reads anvil's output, so it must not block, or Stop will hang.
 func (b *Builder) WithLogger(logger *slog.Logger) *Builder {
 	b.logger = logger
 	return b
 }
 
-// WithStartupTimeout sets the ceiling for waiting on anvil to become ready.
-// Start returns as soon as anvil is listening and answers RPC, which typically
-// takes tens of milliseconds, so the timeout only matters when something is wrong.
-// A zero or negative value leaves the default (DefaultStartupTimeout).
-// Returns the builder for method chaining.
+// WithStartupTimeout sets how long Start waits for anvil to become ready. A zero
+// or negative value keeps DefaultStartupTimeout.
 func (b *Builder) WithStartupTimeout(d time.Duration) *Builder {
 	if d > 0 {
 		b.startupTimeout = d
@@ -1088,9 +1028,8 @@ func (b *Builder) renderArgs() []string {
 	return append(args, b.extraArgs...)
 }
 
-// Build creates an Anvil instance with the configured options.
-// Returns an error wrapping ErrInvalidConfig if the configuration is invalid.
-// The instance must be started with Start() before it can be used.
+// Build returns an instance with the configured options, or an error wrapping
+// ErrInvalidConfig. Call Start to run it.
 func (b *Builder) Build() (*Anvil, error) {
 	if err := b.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
