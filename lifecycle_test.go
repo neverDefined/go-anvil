@@ -86,6 +86,7 @@ func TestLifecycle(t *testing.T) {
 		cancel()
 		require.ErrorIs(t, a.WaitForBlock(canceled, 1), ErrNotStarted, "a finished ctx must not mask it")
 		require.ErrorIs(t, a.WaitForMemPoolEmpty(ctx), ErrNotStarted)
+		assert.Empty(t, a.WSURL())
 
 		require.NoError(t, a.Start())
 		require.NoError(t, a.Close())
@@ -96,6 +97,9 @@ func TestLifecycle(t *testing.T) {
 		assert.Nil(t, a.Client())
 		assert.Nil(t, a.RPCClient())
 		assert.Empty(t, a.URL())
+		assert.Empty(t, a.WSURL())
+		_, err = a.DialWS(ctx)
+		require.ErrorIs(t, err, ErrNotStarted)
 	})
 
 	t.Run("Start is single-use", func(t *testing.T) {

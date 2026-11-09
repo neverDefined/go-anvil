@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -16,6 +17,53 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
+
+// NewT builds and starts a node for a test and stops it when the test ends.
+// A nil builder uses the defaults. Any failure, including a missing anvil
+// binary, fails the test.
+func NewT(tb testing.TB, builder *Builder) *Anvil {
+	tb.Helper()
+	if builder == nil {
+		builder = NewBuilder()
+	}
+	a, err := builder.Build()
+	if err != nil {
+		tb.Fatalf("build anvil: %v", err)
+	}
+	if err := a.Start(); err != nil {
+		tb.Fatalf("start anvil: %v", err)
+	}
+	tb.Cleanup(func() {
+		if err := a.Close(); err != nil {
+			tb.Errorf("stop anvil: %v", err)
+		}
+	})
+	return a
+}
+
+// FundAccounts sets the balance of each address to wei. It stops at the first
+// error.
+func (a *Anvil) FundAccounts(ctx context.Context, addresses []common.Address, wei *big.Int) error {
+	for _, address := range addresses {
+		if err := a.SetBalance(ctx, address, wei); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewFundedAccount generates a new key and sets its address's balance to wei.
+func (a *Anvil) NewFundedAccount(ctx context.Context, wei *big.Int) (Account, error) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		return Account{}, fmt.Errorf("anvil: generate key: %w", err)
+	}
+	account := Account{Key: key, Address: crypto.PubkeyToAddress(key.PublicKey)}
+	if err := a.SetBalance(ctx, account.Address, wei); err != nil {
+		return Account{}, err
+	}
+	return account, nil
+}
 
 // VerifyProof verifies an EIP-1186 proof (as returned by GetProof) against a
 // state root — typically the Root of the block header the proof was taken at.

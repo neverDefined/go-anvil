@@ -2,6 +2,7 @@ package anvil
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"os"
@@ -35,15 +36,11 @@ func requireAnvil(tb testing.TB) {
 	tb.Skipf("skipping integration test: %v", err)
 }
 
-// startAnvil builds and starts an instance and closes it when the test ends.
+// startAnvil starts an instance for the test, or skips it without anvil.
 func startAnvil(tb testing.TB, b *Builder) *Anvil {
 	tb.Helper()
 	requireAnvil(tb)
-	a, err := b.Build()
-	require.NoError(tb, err)
-	require.NoError(tb, a.Start())
-	tb.Cleanup(func() { _ = a.Close() })
-	return a
+	return NewT(tb, b)
 }
 
 // waitForEmptyPool calls WaitForMemPoolEmpty with a deadline.
@@ -77,16 +74,10 @@ func balanceOf(t *testing.T, a *Anvil, addr common.Address) *big.Int {
 	return b
 }
 
-// sendTx sends wei from `from` with eth_sendTransaction. anvil signs it for
-// its default accounts and for impersonated addresses, and rejects it otherwise.
+// sendTx sends wei from `from`. anvil signs it for its default accounts and for
+// impersonated addresses, and rejects it otherwise.
 func sendTx(ctx context.Context, a *Anvil, from, to common.Address, wei int64) (common.Hash, error) {
-	var hash common.Hash
-	err := a.RPCClient().CallContext(ctx, &hash, "eth_sendTransaction", map[string]any{
-		"from":  from,
-		"to":    to,
-		"value": hexutil.EncodeBig(big.NewInt(wei)),
-	})
-	return hash, err
+	return a.SendTransaction(ctx, TxArgs{From: from, To: &to, Value: big.NewInt(wei)})
 }
 
 // waitForBlock calls WaitForBlock with a deadline.
@@ -600,6 +591,312 @@ func TestWaitForMemPoolEmpty(t *testing.T) {
 		require.NoError(t, a.MineBlock(ctx))
 		require.NoError(t, waitForEmptyPool(t, a, time.Second))
 	})
+}
+
+func TestNewT(t *testing.T) {
+	t.Parallel()
+	requireAnvil(t)
+
+	var a *Anvil
+	t.Run("the node runs during the test", func(t *testing.T) {
+		a = NewT(t, nil)
+		require.NoError(t, a.MineBlock(t.Context()))
+	})
+	assert.Empty(t, a.URL(), "the node stops when the test ends")
+
+	chainID, err := NewT(t, NewBuilder().WithChainID(1337)).Client().ChainID(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1337), chainID.Int64())
+}
+
+func TestSendTransaction(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+	from := a.Accounts()[0].Address
+	to := recipient
+
+	hash, err := a.SendTransaction(ctx, TxArgs{From: from, To: &to, Value: big.NewInt(1000), Data: []byte{0x01}, Gas: 100_000})
+	require.NoError(t, err)
+	assert.Equal(t, types.ReceiptStatusSuccessful, receipt(t, a, hash).Status)
+	assert.Equal(t, int64(1000), balanceOf(t, a, to).Int64())
+
+	tx, _, err := a.Client().TransactionByHash(ctx, hash)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x01}, tx.Data())
+	assert.Equal(t, uint64(100_000), tx.Gas())
+
+	// Without To, Data is init code. This one deploys the single byte 0x00.
+	initCode := hexutil.MustDecode("0x6001600c60003960016000f300")
+	hash, err = a.SendTransaction(ctx, TxArgs{From: from, Data: initCode})
+	require.NoError(t, err)
+	code, err := a.Client().CodeAt(ctx, receipt(t, a, hash).ContractAddress, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x00}, code)
+}
+
+func TestDialWS(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+	assert.Equal(t, "ws"+a.URL()[len("http"):], a.WSURL())
+
+	ws, err := a.DialWS(ctx)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	heads := make(chan *types.Header, 1)
+	sub, err := ws.SubscribeNewHead(ctx, heads)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	require.NoError(t, a.MineBlock(ctx))
+	select {
+	case h := <-heads:
+		assert.Equal(t, int64(1), h.Number.Int64())
+	case err := <-sub.Err():
+		t.Fatalf("subscription failed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no new head arrived")
+	}
+}
+
+func TestDumpAndLoadState(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	code := []byte{0x60, 0x00}
+
+	source := startAnvil(t, NewBuilder())
+	require.NoError(t, source.SetCode(ctx, recipient, code))
+	require.NoError(t, source.SetBalance(ctx, stranger, big.NewInt(1234)))
+	require.NoError(t, source.MineBlock(ctx))
+	state, err := source.DumpState(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, state)
+
+	target := startAnvil(t, NewBuilder())
+	bystander := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	require.NoError(t, target.SetBalance(ctx, bystander, big.NewInt(7)))
+
+	require.NoError(t, target.LoadState(ctx, state))
+	assert.Equal(t, int64(1), head(t, target).Number.Int64(), "the head moves to the dumped block")
+	assert.Equal(t, int64(1234), balanceOf(t, target, stranger).Int64())
+	got, err := target.Client().CodeAt(ctx, recipient, nil)
+	require.NoError(t, err)
+	assert.Equal(t, code, got)
+	assert.Equal(t, int64(7), balanceOf(t, target, bystander).Int64(), "LoadState merges, so other accounts stay")
+
+	require.NoError(t, target.ResetState(ctx))
+	assert.Zero(t, balanceOf(t, target, stranger).Sign(), "ResetState undoes a load")
+}
+
+// tokenRuntime is the deployed bytecode of a minimal ERC-20, compiled with
+// `solc --optimize --no-cbor-metadata --bin-runtime`:
+//
+//	contract Token {
+//	    mapping(address => uint256) public balanceOf;
+//	    mapping(address => mapping(address => uint256)) public allowance;
+//	}
+const tokenRuntime = "0x6080604052348015600e575f5ffd5b50600436106030575f3560e01c806370a08231146034578063dd62ed3e146062575b5f5ffd5b6050603f36600460a3565b5f6020819052908152604090205481565b60405190815260200160405180910390f35b6050606d36600460c0565b600160209081525f928352604080842090915290825290205481565b80356001600160a01b0381168114609e575f5ffd5b919050565b5f6020828403121560b2575f5ffd5b60b9826089565b9392505050565b5f5f6040838503121560d0575f5ffd5b60d7836089565b915060e3602084016089565b9050925092905056"
+
+// tokenView calls a view function that takes addresses and returns a uint256.
+func tokenView(t *testing.T, a *Anvil, token common.Address, selector string, args ...common.Address) int64 {
+	t.Helper()
+	data := hexutil.MustDecode(selector)
+	for _, arg := range args {
+		data = append(data, common.LeftPadBytes(arg.Bytes(), 32)...)
+	}
+	out, err := a.Client().CallContract(t.Context(), ethereum.CallMsg{To: &token, Data: data}, nil)
+	require.NoError(t, err)
+	return new(big.Int).SetBytes(out).Int64()
+}
+
+func TestERC20(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+	const balanceOfSelector, allowanceSelector = "0x70a08231", "0xdd62ed3e"
+	token := common.HexToAddress("0x00000000000000000000000000000000000000dd")
+	require.NoError(t, a.SetCode(ctx, token, hexutil.MustDecode(tokenRuntime)))
+
+	require.NoError(t, a.DealERC20(ctx, token, stranger, big.NewInt(42)))
+	assert.Equal(t, int64(42), tokenView(t, a, token, balanceOfSelector, stranger))
+	assert.Zero(t, tokenView(t, a, token, balanceOfSelector, recipient))
+
+	require.NoError(t, a.SetERC20Allowance(ctx, token, stranger, recipient, big.NewInt(7)))
+	assert.Equal(t, int64(7), tokenView(t, a, token, allowanceSelector, stranger, recipient))
+	assert.Zero(t, tokenView(t, a, token, allowanceSelector, recipient, stranger))
+
+	require.Error(t, a.DealERC20(ctx, stranger, recipient, big.NewInt(1)), "an address with no code has no balance slot")
+}
+
+func TestBlockControls(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+
+	require.NoError(t, a.SetNextBlockBaseFee(ctx, 1234))
+	require.NoError(t, a.SetCoinbase(ctx, recipient))
+	require.NoError(t, a.SetBlockGasLimit(ctx, 20_000_000))
+	require.NoError(t, a.MineBlock(ctx))
+
+	h := head(t, a)
+	assert.Equal(t, int64(1234), h.BaseFee.Int64())
+	assert.Equal(t, recipient, h.Coinbase)
+	assert.Equal(t, uint64(20_000_000), h.GasLimit)
+}
+
+func TestReset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil starts a fresh local chain", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		a := startAnvil(t, NewBuilder())
+		from := a.Accounts()[0].Address
+
+		require.NoError(t, a.SetBalance(ctx, from, big.NewInt(1)))
+		require.NoError(t, a.Mine(ctx, 3, 0))
+		id, err := a.Snapshot(ctx)
+		require.NoError(t, err)
+
+		require.NoError(t, a.Reset(ctx, nil))
+		assert.Zero(t, head(t, a).Number.Sign())
+		assert.Positive(t, balanceOf(t, a, from).Cmp(big.NewInt(1)), "default accounts are funded again")
+
+		ok, err := a.Revert(ctx, id)
+		require.NoError(t, err)
+		assert.False(t, ok, "anvil discards snapshots on reset")
+
+		require.NoError(t, a.MineBlock(ctx))
+		require.NoError(t, a.ResetState(ctx))
+		assert.Zero(t, head(t, a).Number.Sign(), "ResetState returns to the reset chain")
+	})
+
+	t.Run("options fork the upstream again", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		upstream := startAnvil(t, NewBuilder())
+		require.NoError(t, upstream.SetBalance(ctx, stranger, big.NewInt(555)))
+		require.NoError(t, upstream.Mine(ctx, 5, 0))
+		a := startAnvil(t, NewBuilder().WithFork(upstream.URL()).WithForkBlockNumber(3))
+		require.Equal(t, int64(3), head(t, a).Number.Int64())
+		require.Equal(t, int64(555), balanceOf(t, a, stranger).Int64(), "the fork reads upstream state")
+		require.NoError(t, a.MineBlock(ctx))
+
+		require.NoError(t, a.Reset(ctx, &ForkOptions{BlockNumber: 2}))
+		assert.Equal(t, int64(2), head(t, a).Number.Int64(), "the URL is kept")
+
+		require.NoError(t, a.Reset(ctx, &ForkOptions{}))
+		assert.Equal(t, int64(5), head(t, a).Number.Int64(), "zero means the upstream's latest, not block 3")
+
+		require.NoError(t, a.Reset(ctx, &ForkOptions{URL: upstream.URL(), BlockNumber: 4}))
+		assert.Equal(t, int64(4), head(t, a).Number.Int64())
+
+		require.NoError(t, a.Reset(ctx, nil))
+		assert.Zero(t, head(t, a).Number.Sign(), "nil stops forking")
+		assert.Zero(t, balanceOf(t, a, stranger).Sign(), "upstream state is gone")
+	})
+
+	t.Run("a local node needs a URL to fork", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		a := startAnvil(t, NewBuilder())
+		require.Error(t, a.Reset(ctx, &ForkOptions{}))
+
+		upstream := startAnvil(t, NewBuilder())
+		require.NoError(t, upstream.Mine(ctx, 2, 0))
+		require.NoError(t, a.Reset(ctx, &ForkOptions{URL: upstream.URL()}))
+		assert.Equal(t, int64(2), head(t, a).Number.Int64())
+	})
+}
+
+func TestDebugTrace(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+	to := recipient
+	tx := TxArgs{From: a.Accounts()[0].Address, To: &to, Value: big.NewInt(1)}
+	callTracer := &TraceConfig{Tracer: "callTracer", TracerConfig: map[string]any{"onlyTopCall": true}}
+
+	hash, err := a.SendTransaction(ctx, tx)
+	require.NoError(t, err)
+	receipt(t, a, hash)
+
+	assertCall := func(raw json.RawMessage) {
+		t.Helper()
+		var call struct {
+			Type string         `json:"type"`
+			To   common.Address `json:"to"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &call), string(raw))
+		assert.Equal(t, "CALL", call.Type)
+		assert.Equal(t, to, call.To)
+	}
+
+	raw, err := a.DebugTraceTransaction(ctx, hash, callTracer)
+	require.NoError(t, err)
+	assertCall(raw)
+
+	raw, err = a.DebugTraceCall(ctx, tx, nil, callTracer)
+	require.NoError(t, err)
+	assertCall(raw)
+
+	raw, err = a.DebugTraceCall(ctx, tx, big.NewInt(0), nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "structLogs")
+}
+
+func TestDebugTraceTransaction_opcodeLogs(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder().WithArgs("--steps-tracing"))
+	contract := common.HexToAddress("0x00000000000000000000000000000000000000cc")
+	require.NoError(t, a.SetCode(ctx, contract, []byte{0x60, 0x00, 0x00})) // PUSH1 0, STOP
+
+	hash, err := a.SendTransaction(ctx, TxArgs{From: a.Accounts()[0].Address, To: &contract})
+	require.NoError(t, err)
+	receipt(t, a, hash)
+
+	raw, err := a.DebugTraceTransaction(ctx, hash, nil)
+	require.NoError(t, err)
+	var trace struct {
+		StructLogs []json.RawMessage `json:"structLogs"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &trace), string(raw))
+	assert.NotEmpty(t, trace.StructLogs)
+}
+
+func TestNewFundedAccount(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+	wei := big.NewInt(1_000_000_000_000_000_000)
+
+	account, err := a.NewFundedAccount(ctx, wei)
+	require.NoError(t, err)
+	assert.Zero(t, wei.Cmp(balanceOf(t, a, account.Address)))
+
+	// The key really controls the address: it can sign a transfer.
+	chainID, err := a.Client().ChainID(ctx)
+	require.NoError(t, err)
+	gasPrice, err := a.Client().SuggestGasPrice(ctx)
+	require.NoError(t, err)
+	to := recipient
+	tx, err := types.SignNewTx(account.Key, types.LatestSignerForChainID(chainID), &types.LegacyTx{To: &to, Value: big.NewInt(1), Gas: 21_000, GasPrice: gasPrice})
+	require.NoError(t, err)
+	require.NoError(t, a.Client().SendTransaction(ctx, tx))
+	assert.Equal(t, types.ReceiptStatusSuccessful, receipt(t, a, tx.Hash()).Status)
+}
+
+func TestFundAccounts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := startAnvil(t, NewBuilder())
+
+	require.NoError(t, a.FundAccounts(ctx, []common.Address{stranger, recipient}, big.NewInt(99)))
+	assert.Equal(t, int64(99), balanceOf(t, a, stranger).Int64())
+	assert.Equal(t, int64(99), balanceOf(t, a, recipient).Int64())
 }
 
 // TestConcurrentCalls runs mixed calls from many goroutines so -race can see

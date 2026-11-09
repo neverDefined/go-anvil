@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `URL()` returns the node's HTTP JSON-RPC endpoint.
 - `ErrProcessExited`, returned by `Start()` when anvil exits before it is ready.
 - `WithArgs(...string)` passes any other flag to anvil.
+- `SendTransaction(ctx, TxArgs)` sends through `eth_sendTransaction`, so a test can act as an impersonated address without holding its key.
+- `NewT(tb, builder)` starts a node for a test and stops it when the test ends.
+- `WSURL()` and `DialWS(ctx)` give WebSocket access, which subscriptions need.
+- `DumpState` and `LoadState` save and restore chain state (#60).
+- `DealERC20` and `SetERC20Allowance` set token balances and allowances.
+- `SetNextBlockBaseFee`, `SetCoinbase` and `SetBlockGasLimit` control future blocks.
+- `FundAccounts` and `NewFundedAccount` set up funded addresses (#56).
+- `DebugTraceTransaction` and `DebugTraceCall` return traces as raw JSON (#58).
 
 ### Changed
 
@@ -42,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `WithLogger(*slog.Logger)` replaces `WithLogLevel`. Anvil's output is discarded by default; it used to go to zerolog's global logger. To see anvil's stdout, use a handler at `slog.LevelDebug`; stderr is logged at Warn. The zerolog dependency is gone.
 - `ErrStartupTimeout` errors include anvil's last stderr lines.
 - `Start()` takes one `evm_snapshot` as the `ResetState` baseline, so the first ID returned by `Snapshot()` is no longer `0x0`.
-- `ResetFork()` takes a new `ResetState` baseline, because anvil discards all snapshots on reset.
+- **Breaking:** `Reset(ctx, *ForkOptions)` replaces `ResetFork(ctx, url, blockNumber)`. `Reset(ctx, nil)` starts a fresh local chain, on forked and non-forked nodes alike. With options and a block number of 0, it forks the upstream's latest block, not the original fork block as the old godoc said.
+- `Reset()` takes a new `ResetState` baseline, because anvil discards all snapshots on reset.
 - The library no longer logs errors it also returns, and `WaitForBlock` no longer logs at Debug on every poll. Errors from RPC methods start with the method name instead (`anvil: evm_mine: ...`).
 
 ### Removed

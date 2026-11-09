@@ -350,25 +350,35 @@ func newTestAnvil(t *testing.T, server *httptest.Server) *Anvil {
 
 // cannedResults answers every wrapped method.
 var cannedResults = map[string]any{
-	"evm_mine":                       nil,
-	"evm_setNextBlockTimestamp":      nil,
-	"evm_increaseTime":               nil,
-	"anvil_setBalance":               nil,
-	"anvil_impersonateAccount":       nil,
-	"anvil_stopImpersonatingAccount": nil,
-	"evm_snapshot":                   "0xabc",
-	"evm_revert":                     true,
-	"anvil_setCode":                  nil,
-	"anvil_setStorageAt":             nil,
-	"anvil_setNonce":                 nil,
-	"anvil_mine":                     nil,
-	"anvil_dropTransaction":          nil,
-	"evm_setAutomine":                nil,
-	"evm_setIntervalMining":          nil,
-	"anvil_autoImpersonateAccount":   nil,
-	"anvil_reset":                    nil,
-	"txpool_status":                  map[string]any{"pending": "0x0", "queued": "0x0"},
-	"eth_blockNumber":                "0x5",
+	"evm_mine":                        nil,
+	"evm_setNextBlockTimestamp":       nil,
+	"evm_increaseTime":                nil,
+	"anvil_setBalance":                nil,
+	"anvil_impersonateAccount":        nil,
+	"anvil_stopImpersonatingAccount":  nil,
+	"evm_snapshot":                    "0xabc",
+	"evm_revert":                      true,
+	"anvil_setCode":                   nil,
+	"anvil_setStorageAt":              nil,
+	"anvil_setNonce":                  nil,
+	"anvil_mine":                      nil,
+	"anvil_dropTransaction":           nil,
+	"evm_setAutomine":                 nil,
+	"evm_setIntervalMining":           nil,
+	"anvil_autoImpersonateAccount":    nil,
+	"anvil_reset":                     nil,
+	"eth_sendTransaction":             common.HexToHash("0xbeef").Hex(),
+	"debug_traceTransaction":          map[string]any{"type": "CALL"},
+	"debug_traceCall":                 map[string]any{"type": "CALL"},
+	"anvil_dumpState":                 "0x1234",
+	"anvil_loadState":                 true,
+	"anvil_dealERC20":                 nil,
+	"anvil_setERC20Allowance":         nil,
+	"anvil_setNextBlockBaseFeePerGas": nil,
+	"anvil_setCoinbase":               nil,
+	"evm_setBlockGasLimit":            true,
+	"txpool_status":                   map[string]any{"pending": "0x0", "queued": "0x0"},
+	"eth_blockNumber":                 "0x5",
 	"eth_getProof": map[string]any{
 		"address":      "0x1234567890123456789012345678901234567890",
 		"accountProof": []string{},
@@ -383,7 +393,13 @@ var cannedResults = map[string]any{
 // TestRPCWrappers pins the JSON-RPC method and params each wrapper sends.
 func TestRPCWrappers(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
-	const a = `"0x1234567890123456789012345678901234567890"`
+	token := common.HexToAddress("0x00000000000000000000000000000000000000dd")
+	spender := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	const (
+		a   = `"0x1234567890123456789012345678901234567890"`
+		tok = `"0x00000000000000000000000000000000000000dd"`
+		spd = `"0x00000000000000000000000000000000000000bb"`
+	)
 
 	cases := []struct {
 		name string
@@ -440,11 +456,62 @@ func TestRPCWrappers(t *testing.T) {
 			calls("txpool_status", `[]`)},
 		{"WaitForBlock", func(ctx context.Context, x *Anvil) error { return x.WaitForBlock(ctx, 5) },
 			calls("eth_blockNumber", `[]`)},
-		// anvil drops every snapshot on reset, so ResetFork takes a new baseline.
-		{"ResetFork", func(ctx context.Context, x *Anvil) error { return x.ResetFork(ctx, "https://example.org", 0) },
+		// anvil drops every snapshot on reset, so Reset takes a new baseline.
+		{"Reset to a local chain", func(ctx context.Context, x *Anvil) error { return x.Reset(ctx, nil) },
+			calls("anvil_reset", `[]`, "evm_snapshot", `[]`)},
+		{"Reset with empty options", func(ctx context.Context, x *Anvil) error { return x.Reset(ctx, &ForkOptions{}) },
+			calls("anvil_reset", `[{"forking":{}}]`, "evm_snapshot", `[]`)},
+		{"Reset to a URL", func(ctx context.Context, x *Anvil) error {
+			return x.Reset(ctx, &ForkOptions{URL: "https://example.org"})
+		},
 			calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org"}}]`, "evm_snapshot", `[]`)},
-		{"ResetFork at a block", func(ctx context.Context, x *Anvil) error { return x.ResetFork(ctx, "https://example.org", 100) },
-			calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org","blockNumber":"0x64"}}]`, "evm_snapshot", `[]`)},
+		{"Reset to a URL and block", func(ctx context.Context, x *Anvil) error {
+			return x.Reset(ctx, &ForkOptions{URL: "https://example.org", BlockNumber: 100})
+		}, calls("anvil_reset", `[{"forking":{"jsonRpcUrl":"https://example.org","blockNumber":"0x64"}}]`, "evm_snapshot", `[]`)},
+		{"SendTransaction", func(ctx context.Context, x *Anvil) error {
+			_, err := x.SendTransaction(ctx, TxArgs{From: addr})
+			return err
+		},
+			calls("eth_sendTransaction", `[{"from":`+a+`}]`)},
+		{"SendTransaction with every field", func(ctx context.Context, x *Anvil) error {
+			_, err := x.SendTransaction(ctx, TxArgs{From: addr, To: &addr, Value: big.NewInt(16), Data: []byte{0xab}, Gas: 21000})
+			return err
+		}, calls("eth_sendTransaction", `[{"from":`+a+`,"to":`+a+`,"value":"0x10","data":"0xab","gas":"0x5208"}]`)},
+		{"DebugTraceTransaction", func(ctx context.Context, x *Anvil) error {
+			_, err := x.DebugTraceTransaction(ctx, common.HexToHash("0xbeef"), nil)
+			return err
+		}, calls("debug_traceTransaction", `["`+common.HexToHash("0xbeef").Hex()+`"]`)},
+		{"DebugTraceTransaction with a tracer", func(ctx context.Context, x *Anvil) error {
+			_, err := x.DebugTraceTransaction(ctx, common.HexToHash("0xbeef"), &TraceConfig{Tracer: "callTracer", TracerConfig: map[string]any{"onlyTopCall": true}})
+			return err
+		}, calls("debug_traceTransaction", `["`+common.HexToHash("0xbeef").Hex()+`",{"tracer":"callTracer","tracerConfig":{"onlyTopCall":true}}]`)},
+		{"DebugTraceCall", func(ctx context.Context, x *Anvil) error {
+			_, err := x.DebugTraceCall(ctx, TxArgs{From: addr}, nil, nil)
+			return err
+		}, calls("debug_traceCall", `[{"from":`+a+`},"latest"]`)},
+		{"DebugTraceCall at a block with a tracer", func(ctx context.Context, x *Anvil) error {
+			_, err := x.DebugTraceCall(ctx, TxArgs{From: addr}, big.NewInt(5), &TraceConfig{Tracer: "callTracer"})
+			return err
+		}, calls("debug_traceCall", `[{"from":`+a+`},"0x5",{"tracer":"callTracer"}]`)},
+		{"DumpState", func(ctx context.Context, x *Anvil) error { _, err := x.DumpState(ctx); return err },
+			calls("anvil_dumpState", `[]`)},
+		{"LoadState", func(ctx context.Context, x *Anvil) error { return x.LoadState(ctx, []byte{0x12, 0x34}) },
+			calls("anvil_loadState", `["0x1234"]`)},
+		// anvil takes the holder first here and the token third in the allowance call.
+		{"DealERC20", func(ctx context.Context, x *Anvil) error { return x.DealERC20(ctx, token, addr, big.NewInt(16)) },
+			calls("anvil_dealERC20", `[`+a+`,`+tok+`,"0x10"]`)},
+		{"SetERC20Allowance", func(ctx context.Context, x *Anvil) error {
+			return x.SetERC20Allowance(ctx, token, addr, spender, big.NewInt(16))
+		}, calls("anvil_setERC20Allowance", `[`+a+`,`+spd+`,`+tok+`,"0x10"]`)},
+		{"SetNextBlockBaseFee", func(ctx context.Context, x *Anvil) error { return x.SetNextBlockBaseFee(ctx, 16) },
+			calls("anvil_setNextBlockBaseFeePerGas", `["0x10"]`)},
+		{"SetCoinbase", func(ctx context.Context, x *Anvil) error { return x.SetCoinbase(ctx, addr) },
+			calls("anvil_setCoinbase", `[`+a+`]`)},
+		{"SetBlockGasLimit", func(ctx context.Context, x *Anvil) error { return x.SetBlockGasLimit(ctx, 16) },
+			calls("evm_setBlockGasLimit", `["0x10"]`)},
+		{"FundAccounts", func(ctx context.Context, x *Anvil) error {
+			return x.FundAccounts(ctx, []common.Address{addr, token}, big.NewInt(5))
+		}, calls("anvil_setBalance", `[`+a+`,"5"]`, "anvil_setBalance", `[`+tok+`,"5"]`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -488,8 +555,45 @@ func TestRPCResults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, common.HexToAddress("0x1234567890123456789012345678901234567890"), proof.Address)
 
-	require.NoError(t, a.ResetFork(ctx, "https://example.org", 0))
+	require.NoError(t, a.Reset(ctx, &ForkOptions{URL: "https://example.org"}))
 	assert.Equal(t, SnapshotID("0xabc"), a.baseline)
+
+	hash, err := a.SendTransaction(ctx, TxArgs{})
+	require.NoError(t, err)
+	assert.Equal(t, common.HexToHash("0xbeef"), hash)
+
+	trace, err := a.DebugTraceTransaction(ctx, hash, nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"CALL"}`, string(trace))
+
+	state, err := a.DumpState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x12, 0x34}, state)
+}
+
+// recordingTB captures a NewT failure. Fatalf stops the goroutine, like the
+// real one.
+type recordingTB struct {
+	testing.TB
+	fatal string
+}
+
+func (r *recordingTB) Helper() {}
+
+func (r *recordingTB) Fatalf(format string, args ...any) {
+	r.fatal = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+func TestNewT_invalidConfigFailsTheTest(t *testing.T) {
+	tb := &recordingTB{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		NewT(tb, NewBuilder().WithPort(-1))
+	}()
+	<-done
+	assert.Contains(t, tb.fatal, ErrInvalidConfig.Error())
 }
 
 func TestDropTransaction_reportsWhetherAnythingWasDropped(t *testing.T) {
